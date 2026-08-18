@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clermont-Ferrand — detailing site selection</title>
+<style>
+  html,body{margin:0;height:100%;font:13px/1.45 system-ui,sans-serif;background:#111}
+  #map{position:absolute;inset:0}
+  .panel{position:absolute;z-index:5;background:#1b1e23ee;color:#e8e8ea;border-radius:8px;
+         padding:10px 12px;box-shadow:0 4px 18px #000a;backdrop-filter:blur(3px)}
+  #ctl{top:10px;left:10px;width:266px;max-height:calc(100% - 20px);overflow:auto}
+  #report{bottom:10px;left:10px;width:266px;display:none;max-height:52%;overflow:auto}
+  h4{margin:0 0 6px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8fa3c8}
+  label{display:block;margin:7px 0 2px;color:#b8c0cc;font-size:11.5px}
+  select,input[type=range]{width:100%}
+  select{background:#2a2f38;color:#e8e8ea;border:1px solid #3a4150;border-radius:5px;padding:4px}
+  .row{display:flex;gap:8px;align-items:center;margin-top:5px}
+  .row input{margin:0}.row label{margin:0;color:#dfe4ea;font-size:12px}
+  button{width:100%;margin-top:9px;background:#2f6df6;color:#fff;border:0;border-radius:5px;
+         padding:7px;font-size:12px;cursor:pointer}
+  button:hover{background:#4b83ff}
+  button.sec{background:#39404d}button.sec:hover{background:#4a5361}
+  #bar{height:11px;border-radius:3px;margin:10px 0 3px}
+  #ticks{display:flex;justify-content:space-between;font-size:10px;color:#98a2b3}
+  .note{margin-top:8px;font-size:10.5px;color:#8892a0;line-height:1.4}
+  table{width:100%;border-collapse:collapse;font-size:11.5px}
+  td{padding:1px 0;vertical-align:top}
+  td:last-child{text-align:right;color:#fff;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .k{color:#8fa3c8}
+  #tip{position:absolute;z-index:6;pointer-events:none;display:none;background:#0e1116f2;color:#e8e8ea;
+       border:1px solid #333a47;border-radius:6px;padding:6px 8px;font-size:11.5px;white-space:pre}
+  .sw{display:inline-block;width:9px;height:9px;border-radius:50%;border:1px solid #fff;vertical-align:-1px}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="tip"></div>
+
+<div class="panel" id="ctl">
+  <h4>Layer</h4>
+  <select id="metric"></select>
+
+  <label>Catchment radius λ — <span id="lamV">2.0 km</span></label>
+  <input type="range" id="lam" min="300" max="6000" step="100" value="2000">
+
+  <label>Weight of self-service / rollover washes — <span id="wwV">0.35</span></label>
+  <input type="range" id="ww" min="0" max="100" step="5" value="35">
+
+  <label>Overlay opacity — <span id="opV">62%</span></label>
+  <input type="range" id="op" min="0" max="100" step="5" value="62">
+
+  <div class="row"><input type="checkbox" id="mDetail" checked>
+    <label for="mDetail"><span class="sw" style="background:#ff2d55"></span> Detailing (__N_DETAIL__)</label></div>
+  <div class="row"><input type="checkbox" id="mWash" checked>
+    <label for="mWash"><span class="sw" style="background:#00d0ff"></span> Washes / stations (__N_WASH__)</label></div>
+  <div class="row"><input type="checkbox" id="hideImp">
+    <label for="hideImp">Hide INSEE-imputed cells</label></div>
+
+  <button id="best">Rank top 10 sites</button>
+  <button id="clr" class="sec">Clear pins &amp; report</button>
+
+  <div id="bar"></div><div id="ticks"></div>
+  <div class="note" id="note"></div>
+</div>
+
+<div class="panel" id="report"></div>
+
+<script>
+const GRID  = /*__GRID__*/null;
+const COMPS = /*__COMPETITORS__*/null;
+const COMMUNES = /*__COMMUNES__*/null;
+const $ = id => document.getElementById(id);
+
+/* ---------- demand model ----------------------------------------------
+   INSEE's 200 m grid carries households, housing type and total standard of
+   living, but no motorisation (that exists only at IRIS level). Cars are
+   estimated from the house/flat split, the strongest motorisation predictor
+   available at this resolution. Every constant here is a knob. */
+const CARS_PER_HOUSE = 1.55, CARS_PER_FLAT = 0.85;
+const NV_REF = 22000;   // ~French median standard of living, €/yr
+const NV_ELAST = 1.6;   // discretionary detailing spend outpaces income
+const R = 6378137;
+
+const clamp = (v,a,b) => v<a?a:v>b?b:v;
+const fmt = n => n>=1e6 ? (n/1e6).toFixed(2)+'M' : n>=1e4 ? (n/1000).toFixed(0)+'k'
+               : n>=1000 ? (n/1000).toFixed(1)+'k' : n>=10 ? n.toFixed(0) : n.toFixed(2);
+const commune = c => COMMUNES[String(c).split(',')[0]] || c;
+
+/* Web-Mercator world coords (256 px at zoom 0), precomputed so a redraw is
+   pure arithmetic instead of 40k projection calls per frame. */
+const worldX = lng => (lng+180)/360*256;
+const worldY = lat => { const s=Math.sin(lat*Math.PI/180);
+                        return 128 - 256/(4*Math.PI)*Math.log((1+s)/(1-s)); };
+
+const N = GRID.features.length;
+const P = GRID.features.map(f=>f.properties);
+const ringX = new Float64Array(N*4), ringY = new Float64Array(N*4);
+const cLat = new Float64Array(N), cLng = new Float64Array(N);
+const mX = new Float64Array(N), mY = new Float64Array(N);   // local metres
+let lat0=0, lng0=0;
+GRID.features.forEach((f,i)=>{
+  const r = f.geometry.coordinates[0];
+  let sx=0, sy=0;
+  for(let k=0;k<4;k++){
+    ringX[i*4+k]=worldX(r[k][0]); ringY[i*4+k]=worldY(r[k][1]);
+    sx+=r[k][0]; sy+=r[k][1];
+  }
+  cLng[i]=sx/4; cLat[i]=sy/4; lat0+=cLat[i]; lng0+=cLng[i];
+});
+lat0/=N; lng0/=N;
+const mPerLng = Math.PI/180*R*Math.cos(lat0*Math.PI/180), mPerLat = Math.PI/180*R;
+for(let i=0;i<N;i++){ mX[i]=(cLng[i]-lng0)*mPerLng; mY[i]=(cLat[i]-lat0)*mPerLat; }
+COMPS.forEach(c=>{
+  c.mx=(c.lng-lng0)*mPerLng; c.my=(c.lat-lat0)*mPerLat;
+  /* a 900-review shop draws harder than a 5-review one, but sub-linearly */
+  c.w = clamp(Math.sqrt(Math.max(c.n_rev,1)/50), .4, 2.5);
+});
+
+const pop=new Float64Array(N), men=new Float64Array(N), nv=new Float64Array(N);
+const mais=new Float64Array(N), cars=new Float64Array(N), demand=new Float64Array(N);
+for(let i=0;i<N;i++){
+  const p=P[i];
+  pop[i]=p.ind; men[i]=p.men; nv[i]=p.nv; mais[i]=p.mais;
+  cars[i]=p.mais*CARS_PER_HOUSE + p.coll*CARS_PER_FLAT;
+  demand[i]=cars[i]*Math.pow(Math.max(p.nv,4000)/NV_REF, NV_ELAST);
+}
+
+/* ---------- state ---------- */
+const press=new Float64Array(N), unmet=new Float64Array(N);
+let lambda=2000, washW=.35, opacity=.62, hideImputed=false;
+let showDetail=true, showWash=true;
+let map, overlay, cv, ctx;
+
+function recompute(){
+  const cut = 3*lambda, cut2 = cut*cut;
+  press.fill(0);
+  for(const c of COMPS){
+    if(c.tier==='detail' ? !showDetail : !showWash) continue;
+    const base = c.w * (c.tier==='detail' ? 1 : washW);
+    if(base<=0) continue;
+    for(let i=0;i<N;i++){
+      const dx=mX[i]-c.mx, dy=mY[i]-c.my, d2=dx*dx+dy*dy;
+      if(d2>cut2) continue;
+      press[i] += base*Math.exp(-Math.sqrt(d2)/lambda);
+    }
+  }
+  for(let i=0;i<N;i++) unmet[i] = demand[i]/(1+press[i]);
+}
+
+const LAYERS = [
+  {name:'Underserved demand  ★', arr:()=>unmet,
+   note:'Estimated detailing spend in the cell, divided down by how much competition already reaches it. This is the layer to shop for locations on.'},
+  {name:'Demand proxy (cars × income)', arr:()=>demand,
+   note:'Estimated cars in the cell weighted by local standard of living to the power '+NV_ELAST+'. Competition ignored.'},
+  {name:'Competitor pressure', arr:()=>press,
+   note:'Σ over competitors of weight × exp(−distance/λ). High = already saturated.'},
+  {name:'Population (INSEE 200 m)', arr:()=>pop,
+   note:'Raw head count per 200 m cell. Filosofi 2021.'},
+  {name:'Households', arr:()=>men, note:'Fiscal households per cell.'},
+  {name:'Estimated cars', arr:()=>cars,
+   note:'houses × '+CARS_PER_HOUSE+' + flats × '+CARS_PER_FLAT+'.'},
+  {name:'Standard of living (€/yr)', arr:()=>nv, abs:1,
+   note:'Mean disposable income per consumption unit. This is a per-person rate, not a density — thinly populated affluent suburbs light up.'},
+  {name:'Households in houses', arr:()=>mais,
+   note:'Best available proxy for driveway/garage and two-car households.'},
+];
+let layer = LAYERS[0];
+
+/* Quantile colouring: these values are heavy-tailed, a linear ramp would show
+   one hot pixel downtown and nothing else. */
+const TURBO=[[48,18,59],[70,107,227],[38,187,203],[122,231,111],[219,213,50],[249,132,42],[199,42,17],[122,4,3]];
+function ramp(t){
+  t=clamp(t,0,1)*(TURBO.length-1);
+  const i=Math.min(Math.floor(t),TURBO.length-2), f=t-i, a=TURBO[i], b=TURBO[i+1];
+  return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f];
+}
+const colors=new Uint8Array(N*3), shown=new Uint8Array(N);
+function colorise(){
+  const v=layer.arr(), idx=[];
+  for(let i=0;i<N;i++){
+    shown[i] = (hideImputed && P[i].est===1) ? 0 : (v[i]>0 ? 1 : 0);
+    if(shown[i]) idx.push(i);
+  }
+  const sorted = idx.map(i=>v[i]).sort((a,b)=>a-b);
+  const n = sorted.length, lo = n?sorted[0]:0, hi = n?sorted[n-1]:1;
+  for(const i of idx){
+    let t;
+    if(layer.abs) t = (v[i]-lo)/((hi-lo)||1);
+    else { let a=0,b=n-1;
+           while(a<b){ const m=(a+b)>>1; if(sorted[m]<v[i]) a=m+1; else b=m; }
+           t = a/((n-1)||1); }
+    const c=ramp(t);
+    colors[i*3]=c[0]; colors[i*3+1]=c[1]; colors[i*3+2]=c[2];
+  }
+  const stops=[]; for(let q=0;q<=10;q++) stops.push('rgb('+ramp(q/10).map(Math.round).join(',')+') '+q*10+'%');
+  $('bar').style.background='linear-gradient(90deg,'+stops.join(',')+')';
+  const at = f => n ? (layer.abs ? lo+f*(hi-lo) : sorted[Math.floor(f*(n-1))]) : 0;
+  $('ticks').innerHTML=[0,.25,.5,.75,1].map(f=>'<span>'+fmt(at(f))+'</span>').join('');
+  $('note').innerHTML='<b>'+layer.name.replace(' ★','')+'</b><br>'+layer.note+
+    '<br><span class="k">'+n+' cells · colour = '+(layer.abs?'linear':'percentile')+'</span>';
+}
+
+/* ---------- map + canvas overlay ---------- */
+function initMap(){
+  map = new google.maps.Map($('map'), {
+    center:{lat:45.7797,lng:3.0863}, zoom:12, mapTypeId:'roadmap',
+    streetViewControl:false, fullscreenControl:false, clickableIcons:false,
+    styles:[{featureType:'poi',elementType:'labels',stylers:[{visibility:'off'}]}],
+  });
+  cv = document.createElement('canvas');
+  ctx = cv.getContext('2d');
+
+  overlay = new google.maps.OverlayView();
+  overlay.onAdd = function(){ this.getPanes().overlayLayer.appendChild(cv); };
+  overlay.draw = function(){
+    const proj=this.getProjection(), b=map.getBounds();
+    if(!proj || !b) return;
+    // derive scale from two known world points: robust to fractional zoom
+    const p0=proj.fromLatLngToDivPixel(new google.maps.LatLng(0,0));
+    const p1=proj.fromLatLngToDivPixel(new google.maps.LatLng(0,90));
+    const s=(p1.x-p0.x)/64, ox=p0.x-128*s, oy=p0.y-128*s;
+    const nw=proj.fromLatLngToDivPixel(
+      new google.maps.LatLng(b.getNorthEast().lat(), b.getSouthWest().lng()));
+    const el=map.getDiv(), W=el.offsetWidth, H=el.offsetHeight, dpr=window.devicePixelRatio||1;
+    if(cv.width!==W*dpr||cv.height!==H*dpr){ cv.width=W*dpr; cv.height=H*dpr; }
+    cv.style.cssText=`position:absolute;pointer-events:none;left:${nw.x}px;top:${nw.y}px;width:${W}px;height:${H}px`;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,W,H);
+    ctx.globalAlpha=opacity;
+    for(let i=0;i<N;i++){
+      if(!shown[i]) continue;
+      const x0=ox+ringX[i*4]*s-nw.x, y0=oy+ringY[i*4]*s-nw.y;
+      if(x0<-40||y0<-40||x0>W+40||y0>H+40) continue;
+      ctx.fillStyle=`rgb(${colors[i*3]},${colors[i*3+1]},${colors[i*3+2]})`;
+      ctx.beginPath(); ctx.moveTo(x0,y0);
+      for(let k=1;k<4;k++) ctx.lineTo(ox+ringX[i*4+k]*s-nw.x, oy+ringY[i*4+k]*s-nw.y);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.globalAlpha=1;
+  };
+  overlay.setMap(map);
+
+  drawCompetitors();
+  map.addListener('click', e => siteReport(e.latLng.lat(), e.latLng.lng()));
+  map.addListener('mousemove', hover);
+  map.addListener('mouseout', ()=>{ $('tip').style.display='none'; });
+  wire();
+  refresh();
+}
+
+const markers=[], pins=[];
+function drawCompetitors(){
+  const iw=new google.maps.InfoWindow();
+  for(const c of COMPS){
+    const m=new google.maps.Marker({
+      position:{lat:c.lat,lng:c.lng}, title:c.name, zIndex:c.tier==='detail'?3:2,
+      icon:{path:google.maps.SymbolPath.CIRCLE, fillColor:c.tier==='detail'?'#ff2d55':'#00d0ff',
+            fillOpacity:.95, strokeColor:'#fff', strokeWeight:1.2, scale:c.tier==='detail'?7:4.5}});
+    m.tier=c.tier;
+    m.addListener('click', ()=>{
+      iw.setContent(`<div style="font:13px system-ui;max-width:250px;color:#111">
+        <b>${c.name}</b><br>${c.addr}<br>
+        <span style="color:#555">${c.type_fr||c.type} · ${c.tier==='detail'?'DETAILING':'wash'}</span><br>
+        ★ ${c.rating??'–'} (${c.n_rev} reviews)${c.tel?'<br>'+c.tel:''}
+        ${c.web?`<br><a href="${c.web}" target="_blank">website</a>`:''}</div>`);
+      iw.open(map,m);
+    });
+    markers.push(m);
+  }
+  syncMarkers();
+}
+const syncMarkers = () => markers.forEach(m =>
+  m.setMap((m.tier==='detail'?showDetail:showWash) ? map : null));
+
+function hover(e){
+  const la=e.latLng.lat(), ln=e.latLng.lng();
+  const dLat=.0011, dLng=.0011/Math.cos(la*Math.PI/180);
+  let hit=-1;
+  for(let i=0;i<N;i++){
+    if(!shown[i]) continue;
+    if(Math.abs(cLat[i]-la)<dLat && Math.abs(cLng[i]-ln)<dLng){ hit=i; break; }
+  }
+  const tip=$('tip');
+  if(hit<0){ tip.style.display='none'; return; }
+  const p=P[hit];
+  tip.textContent =
+    `${commune(p.com)}\n`+
+    `${fmt(pop[hit])} people · ${fmt(men[hit])} households\n`+
+    `${fmt(cars[hit])} est. cars · ${p.mais} hh in houses\n`+
+    `${p.nv.toLocaleString('fr-FR')} €/yr standard of living\n`+
+    `demand ${fmt(demand[hit])} · pressure ${press[hit].toFixed(2)} · unmet ${fmt(unmet[hit])}`+
+    (p.est===1 ? '\n(INSEE-imputed cell)' : '');
+  tip.style.display='block';
+  const r=map.getDiv().getBoundingClientRect();
+  tip.style.left=(e.domEvent.clientX-r.left+14)+'px';
+  tip.style.top =(e.domEvent.clientY-r.top +14)+'px';
+}
+
+/* ---------- site scoring ----------
+   Huff-style: a candidate captures each cell's demand in proportion to its own
+   distance-decayed pull against all competition already reaching that cell. */
+function captureAt(mx,my){
+  const cut2=(3*lambda)*(3*lambda);
+  let cap=0;
+  for(let i=0;i<N;i++){
+    const dx=mX[i]-mx, dy=mY[i]-my, d2=dx*dx+dy*dy;
+    if(d2>cut2) continue;
+    const pull=Math.exp(-Math.sqrt(d2)/lambda);
+    cap += demand[i]*pull/(pull+press[i]);
+  }
+  return cap;
+}
+function tallies(mx,my){
+  let dem1=0,dem3=0,pop1=0,pop3=0;
+  for(let i=0;i<N;i++){
+    const dx=mX[i]-mx, dy=mY[i]-my, d2=dx*dx+dy*dy;
+    if(d2>9e6) continue;
+    dem3+=demand[i]; pop3+=pop[i];
+    if(d2<1e6){ dem1+=demand[i]; pop1+=pop[i]; }
+  }
+  return {dem1,dem3,pop1,pop3};
+}
+function nearest(mx,my,tier){
+  let best=null,bd=Infinity;
+  for(const c of COMPS){
+    if(tier && c.tier!==tier) continue;
+    const d=Math.hypot(c.mx-mx,c.my-my);
+    if(d<bd){ bd=d; best=c; }
+  }
+  return {c:best,d:bd};
+}
+function nearestCell(mx,my){
+  let best=0,bd=Infinity;
+  for(let i=0;i<N;i++){ const d=Math.hypot(mX[i]-mx,mY[i]-my); if(d<bd){bd=d;best=i;} }
+  return best;
+}
+function siteReport(la,ln,label){
+  const mx=(ln-lng0)*mPerLng, my=(la-lat0)*mPerLat;
+  const t=tallies(mx,my), nd=nearest(mx,my,'detail'), na=nearest(mx,my,null);
+  const within=(r,tier)=>COMPS.filter(c=>(!tier||c.tier===tier)&&Math.hypot(c.mx-mx,c.my-my)<r).length;
+  if(!label) addPin(la,ln,'#ffd400');
+  $('report').style.display='block';
+  $('report').innerHTML = `<h4>${label?'Site '+label+' — ':''}${commune(P[nearestCell(mx,my)].com)}</h4><table>
+    <tr><td class="k">Capture score</td><td><b>${fmt(captureAt(mx,my))}</b></td></tr>
+    <tr><td class="k">Population ≤1 / ≤3 km</td><td>${fmt(t.pop1)} / ${fmt(t.pop3)}</td></tr>
+    <tr><td class="k">Demand ≤1 / ≤3 km</td><td>${fmt(t.dem1)} / ${fmt(t.dem3)}</td></tr>
+    <tr><td class="k">Nearest detailer<br>&nbsp;&nbsp;${nd.c?nd.c.name.slice(0,28):'–'}</td><td>${(nd.d/1000).toFixed(2)} km</td></tr>
+    <tr><td class="k">Nearest competitor, any</td><td>${(na.d/1000).toFixed(2)} km</td></tr>
+    <tr><td class="k">Detailers ≤2 / ≤5 km</td><td>${within(2000,'detail')} / ${within(5000,'detail')}</td></tr>
+    <tr><td class="k">All competitors ≤2 km</td><td>${within(2000)}</td></tr>
+    <tr><td class="k">Coordinates</td><td>${la.toFixed(5)}, ${ln.toFixed(5)}</td></tr></table>
+    <div class="note">Capture = Σ demand × pull/(pull + existing pressure). Only meaningful
+    when comparing candidates against each other; the number has no unit.</div>`;
+}
+function addPin(la,ln,color,label){
+  const m=new google.maps.Marker({position:{lat:la,lng:ln}, map, zIndex:9,
+    label: label ? {text:label,color:'#000',fontSize:'11px',fontWeight:'700'} : null,
+    icon:{path:google.maps.SymbolPath.CIRCLE, fillColor:color, fillOpacity:1,
+          strokeColor:'#000', strokeWeight:1.5, scale:11}});
+  if(label) m.addListener('click', ()=>siteReport(la,ln,label));
+  pins.push(m);
+}
+
+function rankSites(){
+  // one candidate per 400 m: 200 m spacing buys nothing and quadruples the cost
+  const seen=new Set(), cand=[];
+  for(let i=0;i<N;i++){
+    if(demand[i]<=0) continue;
+    const k=Math.round(mX[i]/400)+','+Math.round(mY[i]/400);
+    if(seen.has(k)) continue;
+    seen.add(k); cand.push(i);
+  }
+  const scored=cand.map(i=>({i,s:captureAt(mX[i],mY[i])})).sort((a,b)=>b.s-a.s);
+  const picked=[];
+  for(const c of scored){
+    if(picked.every(p=>Math.hypot(mX[p.i]-mX[c.i], mY[p.i]-mY[c.i])>1500)) picked.push(c);
+    if(picked.length===10) break;
+  }
+  pins.forEach(p=>p.setMap(null)); pins.length=0;
+  picked.forEach((c,k)=>addPin(cLat[c.i],cLng[c.i],'#ffd400',String(k+1)));
+  $('report').style.display='block';
+  $('report').innerHTML='<h4>Top 10 sites · λ='+(lambda/1000).toFixed(1)+' km</h4><table>'+
+    picked.map((c,k)=>`<tr><td class="k">${k+1}. ${commune(P[c.i].com)}</td><td>${fmt(c.s)}</td></tr>`).join('')+
+    '</table><div class="note">Greedy pick, kept ≥1.5 km apart, from '+cand.length+
+    ' candidate cells. Click a numbered pin for its full report. These are 200 m cell centroids, not addresses.</div>';
+}
+
+/* ---------- wiring ---------- */
+function refresh(dyn=true){
+  if(dyn) recompute();
+  colorise();
+  if(overlay && overlay.getProjection()) overlay.draw();
+}
+function wire(){
+  $('metric').innerHTML = LAYERS.map((l,i)=>`<option value="${i}">${l.name}</option>`).join('');
+  $('metric').onchange = e => { layer=LAYERS[+e.target.value]; refresh(false); };
+  $('lam').oninput = e => { lambda=+e.target.value; $('lamV').textContent=(lambda/1000).toFixed(1)+' km'; refresh(); };
+  $('ww').oninput  = e => { washW=+e.target.value/100; $('wwV').textContent=washW.toFixed(2); refresh(); };
+  $('op').oninput  = e => { opacity=+e.target.value/100; $('opV').textContent=Math.round(opacity*100)+'%'; overlay.draw(); };
+  $('mDetail').onchange = e => { showDetail=e.target.checked; syncMarkers(); refresh(); };
+  $('mWash').onchange   = e => { showWash=e.target.checked;   syncMarkers(); refresh(); };
+  $('hideImp').onchange = e => { hideImputed=e.target.checked; refresh(false); };
+  $('best').onclick = () => { const b=$('best'); b.textContent='working…';
+    setTimeout(()=>{ rankSites(); b.textContent='Rank top 10 sites'; },20); };
+  $('clr').onclick = () => { pins.forEach(p=>p.setMap(null)); pins.length=0; $('report').style.display='none'; };
+}
+window.initMap = initMap;
+</script>
+<script async src="https://maps.googleapis.com/maps/api/js?key=__KEY__&callback=initMap&loading=async"></script>
+</body>
+</html>

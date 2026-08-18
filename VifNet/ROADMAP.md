@@ -1,0 +1,5 @@
+- [x] choose name
+- [ ] choose street address
+  - [ ] google maps sql, to see population numbes (mb even (salaries / house costs) somehow, so we could have it even more precise, but idk)
+- [ ] click through creation
+- [ ] buy domain
