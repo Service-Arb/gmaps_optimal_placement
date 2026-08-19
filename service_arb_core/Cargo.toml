@@ -1,0 +1,19 @@
+[package]
+name = "service_arb_core"
+description = "Grid cells, EPSG:3035 reprojection and column expressions for service_arb"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+evalexpr = "13"
+eyre.workspace = true
+indexmap.workspace = true
+proj4rs = "0.1"
+schemars.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

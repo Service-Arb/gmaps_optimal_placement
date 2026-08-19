@@ -1,0 +1,27 @@
+[package]
+name = "service_arb"
+description = "Config-driven service site selection: a socio-economic grid under the competitors already on it"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+service_arb_core.workspace = true
+service_arb_sources.workspace = true
+
+clap = { version = "4", features = ["derive"] }
+color-eyre.workspace = true
+eyre.workspace = true
+indexmap.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml = "1"
+
+[dev-dependencies]
+insta = "1"
+
+[lints]
+workspace = true

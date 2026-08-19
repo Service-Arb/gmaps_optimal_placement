@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Clermont-Ferrand — detailing site selection</title>
+<title>__TITLE__</title>
 <style>
   html,body{margin:0;height:100%;font:13px/1.45 system-ui,sans-serif;background:#111}
   #map{position:absolute;inset:0}
@@ -40,23 +40,18 @@
   <h4>Layer</h4>
   <select id="metric"></select>
 
-  <label>Catchment radius λ — <span id="lamV">2.0 km</span></label>
-  <input type="range" id="lam" min="300" max="6000" step="100" value="2000">
-
-  <label>Weight of self-service / rollover washes — <span id="wwV">0.35</span></label>
-  <input type="range" id="ww" min="0" max="100" step="5" value="35">
+  <label>Catchment radius λ — <span id="lamV"></span></label>
+  <input type="range" id="lam" min="300" max="6000" step="100">
 
   <label>Overlay opacity — <span id="opV">62%</span></label>
   <input type="range" id="op" min="0" max="100" step="5" value="62">
 
-  <div class="row"><input type="checkbox" id="mDetail" checked>
-    <label for="mDetail"><span class="sw" style="background:#ff2d55"></span> Detailing (__N_DETAIL__)</label></div>
-  <div class="row"><input type="checkbox" id="mWash" checked>
-    <label for="mWash"><span class="sw" style="background:#00d0ff"></span> Washes / stations (__N_WASH__)</label></div>
+  <div id="tiers"></div>
   <div class="row"><input type="checkbox" id="hideImp">
-    <label for="hideImp">Hide INSEE-imputed cells</label></div>
+    <label for="hideImp">Hide imputed cells (<span id="nImp"></span>)</label></div>
 
   <button id="best">Rank top 10 sites</button>
+  <button id="cands" style="display:none">Compare candidates</button>
   <button id="clr" class="sec">Clear pins &amp; report</button>
 
   <div id="bar"></div><div id="ticks"></div>
@@ -66,25 +61,14 @@
 <div class="panel" id="report"></div>
 
 <script>
-const GRID  = /*__GRID__*/null;
-const COMPS = /*__COMPETITORS__*/null;
-const COMMUNES = /*__COMMUNES__*/null;
+const D = /*__DATA__*/null;
 const $ = id => document.getElementById(id);
-
-/* ---------- demand model ----------------------------------------------
-   INSEE's 200 m grid carries households, housing type and total standard of
-   living, but no motorisation (that exists only at IRIS level). Cars are
-   estimated from the house/flat split, the strongest motorisation predictor
-   available at this resolution. Every constant here is a knob. */
-const CARS_PER_HOUSE = 1.55, CARS_PER_FLAT = 0.85;
-const NV_REF = 22000;   // ~French median standard of living, €/yr
-const NV_ELAST = 1.6;   // discretionary detailing spend outpaces income
 const R = 6378137;
+const TIER_COLORS = ['#ff2d55','#00d0ff','#ffb020','#7ae77a','#c78bff'];
 
 const clamp = (v,a,b) => v<a?a:v>b?b:v;
 const fmt = n => n>=1e6 ? (n/1e6).toFixed(2)+'M' : n>=1e4 ? (n/1000).toFixed(0)+'k'
                : n>=1000 ? (n/1000).toFixed(1)+'k' : n>=10 ? n.toFixed(0) : n.toFixed(2);
-const commune = c => COMMUNES[String(c).split(',')[0]] || c;
 
 /* Web-Mercator world coords (256 px at zoom 0), precomputed so a redraw is
    pure arithmetic instead of 40k projection calls per frame. */
@@ -92,51 +76,42 @@ const worldX = lng => (lng+180)/360*256;
 const worldY = lat => { const s=Math.sin(lat*Math.PI/180);
                         return 128 - 256/(4*Math.PI)*Math.log((1+s)/(1-s)); };
 
-const N = GRID.features.length;
-const P = GRID.features.map(f=>f.properties);
+const N = D.place.length;
+const COMPS = D.pois;
+const TIERS = D.tiers.map(t => ({name:t.name, weight:t.weight, show:true}));
+const demand = Float64Array.from(D.demand);
+
 const ringX = new Float64Array(N*4), ringY = new Float64Array(N*4);
 const cLat = new Float64Array(N), cLng = new Float64Array(N);
 const mX = new Float64Array(N), mY = new Float64Array(N);   // local metres
 let lat0=0, lng0=0;
-GRID.features.forEach((f,i)=>{
-  const r = f.geometry.coordinates[0];
+for(let i=0;i<N;i++){
   let sx=0, sy=0;
   for(let k=0;k<4;k++){
-    ringX[i*4+k]=worldX(r[k][0]); ringY[i*4+k]=worldY(r[k][1]);
-    sx+=r[k][0]; sy+=r[k][1];
+    const lng=D.ring[i*8+k*2], lat=D.ring[i*8+k*2+1];
+    ringX[i*4+k]=worldX(lng); ringY[i*4+k]=worldY(lat);
+    sx+=lng; sy+=lat;
   }
   cLng[i]=sx/4; cLat[i]=sy/4; lat0+=cLat[i]; lng0+=cLng[i];
-});
+}
 lat0/=N; lng0/=N;
 const mPerLng = Math.PI/180*R*Math.cos(lat0*Math.PI/180), mPerLat = Math.PI/180*R;
-for(let i=0;i<N;i++){ mX[i]=(cLng[i]-lng0)*mPerLng; mY[i]=(cLat[i]-lat0)*mPerLat; }
-COMPS.forEach(c=>{
-  c.mx=(c.lng-lng0)*mPerLng; c.my=(c.lat-lat0)*mPerLat;
-  /* a 900-review shop draws harder than a 5-review one, but sub-linearly */
-  c.w = clamp(Math.sqrt(Math.max(c.n_rev,1)/50), .4, 2.5);
-});
-
-const pop=new Float64Array(N), men=new Float64Array(N), nv=new Float64Array(N);
-const mais=new Float64Array(N), cars=new Float64Array(N), demand=new Float64Array(N);
-for(let i=0;i<N;i++){
-  const p=P[i];
-  pop[i]=p.ind; men[i]=p.men; nv[i]=p.nv; mais[i]=p.mais;
-  cars[i]=p.mais*CARS_PER_HOUSE + p.coll*CARS_PER_FLAT;
-  demand[i]=cars[i]*Math.pow(Math.max(p.nv,4000)/NV_REF, NV_ELAST);
-}
+const toLocal = (la,ln) => [(ln-lng0)*mPerLng, (la-lat0)*mPerLat];
+for(let i=0;i<N;i++){ [mX[i],mY[i]] = toLocal(cLat[i],cLng[i]); }
+for(const c of COMPS){ [c.mx,c.my] = toLocal(c.lat,c.lng); c.ti = TIERS.findIndex(t=>t.name===c.tier); }
 
 /* ---------- state ---------- */
 const press=new Float64Array(N), unmet=new Float64Array(N);
-let lambda=2000, washW=.35, opacity=.62, hideImputed=false;
-let showDetail=true, showWash=true;
+let lambda=D.lambda_m, opacity=.62, hideImputed=false;
 let map, overlay, cv, ctx;
 
 function recompute(){
-  const cut = 3*lambda, cut2 = cut*cut;
+  const cut2 = (3*lambda)*(3*lambda);
   press.fill(0);
   for(const c of COMPS){
-    if(c.tier==='detail' ? !showDetail : !showWash) continue;
-    const base = c.w * (c.tier==='detail' ? 1 : washW);
+    const t=TIERS[c.ti];
+    if(!t.show) continue;
+    const base = c.w * t.weight;
     if(base<=0) continue;
     for(let i=0;i<N;i++){
       const dx=mX[i]-c.mx, dy=mY[i]-c.my, d2=dx*dx+dy*dy;
@@ -147,24 +122,16 @@ function recompute(){
   for(let i=0;i<N;i++) unmet[i] = demand[i]/(1+press[i]);
 }
 
+/* The three that move under the sliders, then whatever the study asked for. */
 const LAYERS = [
   {name:'Underserved demand  ★', arr:()=>unmet,
-   note:'Estimated detailing spend in the cell, divided down by how much competition already reaches it. This is the layer to shop for locations on.'},
-  {name:'Demand proxy (cars × income)', arr:()=>demand,
-   note:'Estimated cars in the cell weighted by local standard of living to the power '+NV_ELAST+'. Competition ignored.'},
+   note:'Demand in the cell, divided down by how much competition already reaches it. This is the layer to shop for locations on.'},
   {name:'Competitor pressure', arr:()=>press,
    note:'Σ over competitors of weight × exp(−distance/λ). High = already saturated.'},
-  {name:'Population (INSEE 200 m)', arr:()=>pop,
-   note:'Raw head count per 200 m cell. Filosofi 2021.'},
-  {name:'Households', arr:()=>men, note:'Fiscal households per cell.'},
-  {name:'Estimated cars', arr:()=>cars,
-   note:'houses × '+CARS_PER_HOUSE+' + flats × '+CARS_PER_FLAT+'.'},
-  {name:'Standard of living (€/yr)', arr:()=>nv, abs:1,
-   note:'Mean disposable income per consumption unit. This is a per-person rate, not a density — thinly populated affluent suburbs light up.'},
-  {name:'Households in houses', arr:()=>mais,
-   note:'Best available proxy for driveway/garage and two-car households.'},
-];
+  {name:'Demand', arr:()=>demand, note:D.demand_note},
+].concat(D.layers.map(l => ({name:l.name, arr:()=>l.values, abs:l.scale==='linear', note:l.note})));
 let layer = LAYERS[0];
+const layerByName = n => LAYERS.find(l => l.name.replace(' ★','').trim() === n);
 
 /* Quantile colouring: these values are heavy-tailed, a linear ramp would show
    one hot pixel downtown and nothing else. */
@@ -178,7 +145,7 @@ const colors=new Uint8Array(N*3), shown=new Uint8Array(N);
 function colorise(){
   const v=layer.arr(), idx=[];
   for(let i=0;i<N;i++){
-    shown[i] = (hideImputed && P[i].est===1) ? 0 : (v[i]>0 ? 1 : 0);
+    shown[i] = (hideImputed && D.imputed[i]===1) ? 0 : (v[i]>0 ? 1 : 0);
     if(shown[i]) idx.push(i);
   }
   const sorted = idx.map(i=>v[i]).sort((a,b)=>a-b);
@@ -203,7 +170,7 @@ function colorise(){
 /* ---------- map + canvas overlay ---------- */
 function initMap(){
   map = new google.maps.Map($('map'), {
-    center:{lat:45.7797,lng:3.0863}, zoom:12, mapTypeId:'roadmap',
+    center:{lat:D.center[0],lng:D.center[1]}, zoom:D.zoom, mapTypeId:'roadmap',
     streetViewControl:false, fullscreenControl:false, clickableIcons:false,
     styles:[{featureType:'poi',elementType:'labels',stylers:[{visibility:'off'}]}],
   });
@@ -241,6 +208,10 @@ function initMap(){
   overlay.setMap(map);
 
   drawCompetitors();
+  D.candidates.forEach((c,k)=>{
+    [c.mx,c.my]=toLocal(c.at[0],c.at[1]);
+    addPin(c.at[0], c.at[1], '#7cff8f', String.fromCharCode(65+k), c.name);
+  });
   map.addListener('click', e => siteReport(e.latLng.lat(), e.latLng.lng()));
   map.addListener('mousemove', hover);
   map.addListener('mouseout', ()=>{ $('tip').style.display='none'; });
@@ -253,14 +224,14 @@ function drawCompetitors(){
   const iw=new google.maps.InfoWindow();
   for(const c of COMPS){
     const m=new google.maps.Marker({
-      position:{lat:c.lat,lng:c.lng}, title:c.name, zIndex:c.tier==='detail'?3:2,
-      icon:{path:google.maps.SymbolPath.CIRCLE, fillColor:c.tier==='detail'?'#ff2d55':'#00d0ff',
-            fillOpacity:.95, strokeColor:'#fff', strokeWeight:1.2, scale:c.tier==='detail'?7:4.5}});
-    m.tier=c.tier;
+      position:{lat:c.lat,lng:c.lng}, title:c.name, zIndex:c.ti===0?3:2,
+      icon:{path:google.maps.SymbolPath.CIRCLE, fillColor:TIER_COLORS[c.ti%TIER_COLORS.length],
+            fillOpacity:.95, strokeColor:'#fff', strokeWeight:1.2, scale:c.ti===0?7:4.5}});
+    m.ti=c.ti;
     m.addListener('click', ()=>{
       iw.setContent(`<div style="font:13px system-ui;max-width:250px;color:#111">
         <b>${c.name}</b><br>${c.addr}<br>
-        <span style="color:#555">${c.type_fr||c.type} · ${c.tier==='detail'?'DETAILING':'wash'}</span><br>
+        <span style="color:#555">${c.kind_label||c.kind} · ${c.tier}</span><br>
         ★ ${c.rating??'–'} (${c.n_rev} reviews)${c.tel?'<br>'+c.tel:''}
         ${c.web?`<br><a href="${c.web}" target="_blank">website</a>`:''}</div>`);
       iw.open(map,m);
@@ -269,8 +240,7 @@ function drawCompetitors(){
   }
   syncMarkers();
 }
-const syncMarkers = () => markers.forEach(m =>
-  m.setMap((m.tier==='detail'?showDetail:showWash) ? map : null));
+const syncMarkers = () => markers.forEach(m => m.setMap(TIERS[m.ti].show ? map : null));
 
 function hover(e){
   const la=e.latLng.lat(), ln=e.latLng.lng();
@@ -282,14 +252,10 @@ function hover(e){
   }
   const tip=$('tip');
   if(hit<0){ tip.style.display='none'; return; }
-  const p=P[hit];
-  tip.textContent =
-    `${commune(p.com)}\n`+
-    `${fmt(pop[hit])} people · ${fmt(men[hit])} households\n`+
-    `${fmt(cars[hit])} est. cars · ${p.mais} hh in houses\n`+
-    `${p.nv.toLocaleString('fr-FR')} €/yr standard of living\n`+
+  tip.textContent = D.place[hit]+'\n'+
+    D.layers.map(l=>`${l.name} ${fmt(l.values[hit])}`).join('\n')+'\n'+
     `demand ${fmt(demand[hit])} · pressure ${press[hit].toFixed(2)} · unmet ${fmt(unmet[hit])}`+
-    (p.est===1 ? '\n(INSEE-imputed cell)' : '');
+    (D.imputed[hit]===1 ? '\n(imputed cell)' : '');
   tip.style.display='block';
   const r=map.getDiv().getBoundingClientRect();
   tip.style.left=(e.domEvent.clientX-r.left+14)+'px';
@@ -310,55 +276,73 @@ function captureAt(mx,my){
   }
   return cap;
 }
-function tallies(mx,my){
-  let dem1=0,dem3=0,pop1=0,pop3=0;
+function demandWithin(mx,my){
+  let d1=0,d3=0;
   for(let i=0;i<N;i++){
     const dx=mX[i]-mx, dy=mY[i]-my, d2=dx*dx+dy*dy;
     if(d2>9e6) continue;
-    dem3+=demand[i]; pop3+=pop[i];
-    if(d2<1e6){ dem1+=demand[i]; pop1+=pop[i]; }
+    d3+=demand[i];
+    if(d2<1e6) d1+=demand[i];
   }
-  return {dem1,dem3,pop1,pop3};
+  return [d1,d3];
 }
 function nearest(mx,my,tier){
   let best=null,bd=Infinity;
   for(const c of COMPS){
-    if(tier && c.tier!==tier) continue;
+    if(tier!==undefined && c.tier!==tier) continue;
     const d=Math.hypot(c.mx-mx,c.my-my);
     if(d<bd){ bd=d; best=c; }
   }
   return {c:best,d:bd};
 }
+const within=(mx,my,r,tier)=>COMPS.filter(c=>(tier===undefined||c.tier===tier)&&Math.hypot(c.mx-mx,c.my-my)<r).length;
 function nearestCell(mx,my){
   let best=0,bd=Infinity;
   for(let i=0;i<N;i++){ const d=Math.hypot(mX[i]-mx,mY[i]-my); if(d<bd){bd=d;best=i;} }
   return best;
 }
 function siteReport(la,ln,label){
-  const mx=(ln-lng0)*mPerLng, my=(la-lat0)*mPerLat;
-  const t=tallies(mx,my), nd=nearest(mx,my,'detail'), na=nearest(mx,my,null);
-  const within=(r,tier)=>COMPS.filter(c=>(!tier||c.tier===tier)&&Math.hypot(c.mx-mx,c.my-my)<r).length;
+  const [mx,my]=toLocal(la,ln);
+  const [d1,d3]=demandWithin(mx,my), na=nearest(mx,my);
   if(!label) addPin(la,ln,'#ffd400');
   $('report').style.display='block';
-  $('report').innerHTML = `<h4>${label?'Site '+label+' — ':''}${commune(P[nearestCell(mx,my)].com)}</h4><table>
+  $('report').innerHTML = `<h4>${label?label+' — ':''}${D.place[nearestCell(mx,my)]}</h4><table>
     <tr><td class="k">Capture score</td><td><b>${fmt(captureAt(mx,my))}</b></td></tr>
-    <tr><td class="k">Population ≤1 / ≤3 km</td><td>${fmt(t.pop1)} / ${fmt(t.pop3)}</td></tr>
-    <tr><td class="k">Demand ≤1 / ≤3 km</td><td>${fmt(t.dem1)} / ${fmt(t.dem3)}</td></tr>
-    <tr><td class="k">Nearest detailer<br>&nbsp;&nbsp;${nd.c?nd.c.name.slice(0,28):'–'}</td><td>${(nd.d/1000).toFixed(2)} km</td></tr>
-    <tr><td class="k">Nearest competitor, any</td><td>${(na.d/1000).toFixed(2)} km</td></tr>
-    <tr><td class="k">Detailers ≤2 / ≤5 km</td><td>${within(2000,'detail')} / ${within(5000,'detail')}</td></tr>
-    <tr><td class="k">All competitors ≤2 km</td><td>${within(2000)}</td></tr>
+    <tr><td class="k">Demand ≤1 / ≤3 km</td><td>${fmt(d1)} / ${fmt(d3)}</td></tr>`+
+    TIERS.map(t=>{ const n=nearest(mx,my,t.name);
+      return `<tr><td class="k">Nearest ${t.name}<br>&nbsp;&nbsp;${n.c?n.c.name.slice(0,28):'–'}</td><td>${(n.d/1000).toFixed(2)} km</td></tr>`+
+             `<tr><td class="k">${t.name} ≤2 / ≤5 km</td><td>${within(mx,my,2000,t.name)} / ${within(mx,my,5000,t.name)}</td></tr>`;
+    }).join('')+
+    `<tr><td class="k">Nearest competitor, any</td><td>${(na.d/1000).toFixed(2)} km</td></tr>
+    <tr><td class="k">All competitors ≤2 km</td><td>${within(mx,my,2000)}</td></tr>
     <tr><td class="k">Coordinates</td><td>${la.toFixed(5)}, ${ln.toFixed(5)}</td></tr></table>
     <div class="note">Capture = Σ demand × pull/(pull + existing pressure). Only meaningful
     when comparing candidates against each other; the number has no unit.</div>`;
 }
-function addPin(la,ln,color,label){
-  const m=new google.maps.Marker({position:{lat:la,lng:ln}, map, zIndex:9,
+function addPin(la,ln,color,label,title){
+  const m=new google.maps.Marker({position:{lat:la,lng:ln}, map, zIndex:9, title:title||'',
     label: label ? {text:label,color:'#000',fontSize:'11px',fontWeight:'700'} : null,
     icon:{path:google.maps.SymbolPath.CIRCLE, fillColor:color, fillOpacity:1,
           strokeColor:'#000', strokeWeight:1.5, scale:11}});
-  if(label) m.addListener('click', ()=>siteReport(la,ln,label));
+  if(label) m.addListener('click', ()=>siteReport(la,ln,title||label));
   pins.push(m);
+}
+
+function compareCandidates(){
+  const rows = D.candidates.map(c => {
+    const [d1,d3]=demandWithin(c.mx,c.my);
+    return {name:c.name, cap:captureAt(c.mx,c.my), d1, d3, near:nearest(c.mx,c.my).d, n2:within(c.mx,c.my,2000)};
+  });
+  const best = Math.max(...rows.map(r=>r.cap));
+  $('report').style.display='block';
+  $('report').innerHTML='<h4>Candidates · λ='+(lambda/1000).toFixed(1)+' km</h4><table>'+
+    '<tr><td class="k">Capture score</td><td></td></tr>'+
+    rows.map(r=>`<tr><td class="k">${r.name}</td><td>${fmt(r.cap)} · ${(100*r.cap/best).toFixed(0)}%</td></tr>`).join('')+
+    '<tr><td class="k">&nbsp;</td><td></td></tr><tr><td class="k">Demand ≤1 / ≤3 km</td><td></td></tr>'+
+    rows.map(r=>`<tr><td class="k">${r.name}</td><td>${fmt(r.d1)} / ${fmt(r.d3)}</td></tr>`).join('')+
+    '<tr><td class="k">&nbsp;</td><td></td></tr><tr><td class="k">Nearest competitor · ≤2 km</td><td></td></tr>'+
+    rows.map(r=>`<tr><td class="k">${r.name}</td><td>${(r.near/1000).toFixed(2)} km · ${r.n2}</td></tr>`).join('')+
+    '</table><div class="note">Percentages are against the best candidate here, not against the best site in the area — use "Rank top 10 sites" for that.</div>';
 }
 
 function rankSites(){
@@ -380,9 +364,9 @@ function rankSites(){
   picked.forEach((c,k)=>addPin(cLat[c.i],cLng[c.i],'#ffd400',String(k+1)));
   $('report').style.display='block';
   $('report').innerHTML='<h4>Top 10 sites · λ='+(lambda/1000).toFixed(1)+' km</h4><table>'+
-    picked.map((c,k)=>`<tr><td class="k">${k+1}. ${commune(P[c.i].com)}</td><td>${fmt(c.s)}</td></tr>`).join('')+
+    picked.map((c,k)=>`<tr><td class="k">${k+1}. ${D.place[c.i]}</td><td>${fmt(c.s)}</td></tr>`).join('')+
     '</table><div class="note">Greedy pick, kept ≥1.5 km apart, from '+cand.length+
-    ' candidate cells. Click a numbered pin for its full report. These are 200 m cell centroids, not addresses.</div>';
+    ' candidate cells. Click a numbered pin for its full report. These are cell centroids, not addresses.</div>';
 }
 
 /* ---------- wiring ---------- */
@@ -394,14 +378,28 @@ function refresh(dyn=true){
 function wire(){
   $('metric').innerHTML = LAYERS.map((l,i)=>`<option value="${i}">${l.name}</option>`).join('');
   $('metric').onchange = e => { layer=LAYERS[+e.target.value]; refresh(false); };
+  $('lam').value = lambda;
+  $('lamV').textContent = (lambda/1000).toFixed(1)+' km';
   $('lam').oninput = e => { lambda=+e.target.value; $('lamV').textContent=(lambda/1000).toFixed(1)+' km'; refresh(); };
-  $('ww').oninput  = e => { washW=+e.target.value/100; $('wwV').textContent=washW.toFixed(2); refresh(); };
   $('op').oninput  = e => { opacity=+e.target.value/100; $('opV').textContent=Math.round(opacity*100)+'%'; overlay.draw(); };
-  $('mDetail').onchange = e => { showDetail=e.target.checked; syncMarkers(); refresh(); };
-  $('mWash').onchange   = e => { showWash=e.target.checked;   syncMarkers(); refresh(); };
+
+  $('tiers').innerHTML = TIERS.map((t,i)=>{
+    const n = COMPS.filter(c=>c.ti===i).length;
+    return `<div class="row"><input type="checkbox" id="mT${i}" checked>
+      <label for="mT${i}"><span class="sw" style="background:${TIER_COLORS[i%TIER_COLORS.length]}"></span> ${t.name} (${n})</label></div>
+      <label>weight of one ${t.name} — <span id="wT${i}V">${t.weight.toFixed(2)}</span></label>
+      <input type="range" id="wT${i}" min="0" max="200" step="5" value="${Math.round(t.weight*100)}">`;
+  }).join('');
+  TIERS.forEach((t,i)=>{
+    $('mT'+i).onchange = e => { t.show=e.target.checked; syncMarkers(); refresh(); };
+    $('wT'+i).oninput  = e => { t.weight=+e.target.value/100; $('wT'+i+'V').textContent=t.weight.toFixed(2); refresh(); };
+  });
+
+  $('nImp').textContent = D.imputed.reduce((a,b)=>a+b,0);
   $('hideImp').onchange = e => { hideImputed=e.target.checked; refresh(false); };
   $('best').onclick = () => { const b=$('best'); b.textContent='working…';
     setTimeout(()=>{ rankSites(); b.textContent='Rank top 10 sites'; },20); };
+  if(D.candidates.length){ $('cands').style.display='block'; $('cands').onclick = compareCandidates; }
   $('clr').onclick = () => { pins.forEach(p=>p.setMap(null)); pins.length=0; $('report').style.display='none'; };
 }
 window.initMap = initMap;

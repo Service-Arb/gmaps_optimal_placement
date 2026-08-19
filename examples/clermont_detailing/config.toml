@@ -1,0 +1,84 @@
+name = "clermont_detailing"
+
+[area]
+# Clermont-Ferrand agglomeration, generous: Riom (N) to Issoire-ward (S), Volvic (W) to Lezoux-ward (E).
+bbox   = { lat = [45.55, 45.95], lon = [2.90, 3.40] }
+center = [45.7797, 3.0863]
+zoom   = 12
+
+[grid]
+source  = "insee_filosofi_200m"
+vintage = 2021
+
+[poi]
+source  = "google_places"
+queries = [
+  "lavage auto",
+  "nettoyage voiture",
+  "car detailing",
+  "car wash",
+  "station de lavage",
+  "lavage auto sans eau",
+  "esthétique automobile",
+  "covering carrosserie",
+]
+tiles = 3
+
+# A dedicated detailer is direct competition; a rollover wash at a hypermarket is weak.
+[[poi.tier]]
+name   = "detail"
+weight = 1.0
+match  = "detail|esthétique|esthetique|nettoyage|clean|polissage|céramique|ceramique|\\bppf\\b|covering|renovation auto|rénovation auto|carrosserie"
+
+[[poi.tier]]
+name   = "wash"
+weight = 0.35
+match  = "lavage|lav'|lav’|\\blav\\b|wash|karcher|kärcher|rouleau"
+types  = ["car_wash"]
+
+# "lav'" and "wash" also match clothes laundromats and a bike-wash point
+[poi.drop]
+match = "laverie|vélo|velo|\\bbike\\b|pressing|blanchisserie"
+types = ["laundry"]
+
+# INSEE publishes the standard of living summed over individuals, and no motorisation at all at
+# 200 m — that variable exists only at IRIS level. See docs/ARCHITECTURE.md on what this model
+# therefore does not know.
+[columns]
+nv   = "ind_snv / max(ind, 1)"
+cars = "men_mais * 1.55 + men_coll * 0.85"
+
+[model]
+demand     = "cars * (max(nv, 4000) / 22000) ^ 1.6"
+poi_weight = "clamp(sqrt(max(n_rev, 1) / 50), 0.4, 2.5)"
+lambda_m   = 2000
+
+[[layer]]
+name = "Population"
+expr = "ind"
+note = "Raw head count per 200 m cell."
+
+[[layer]]
+name = "Households"
+expr = "men"
+note = "Fiscal households per cell."
+
+[[layer]]
+name = "Estimated cars"
+expr = "cars"
+note = "Houses × 1.55 + flats × 0.85. Inferred, not measured."
+
+[[layer]]
+name  = "Standard of living (€/yr)"
+expr  = "nv"
+scale = "linear"
+note  = "Mean disposable income per consumption unit. A per-person rate, not a density — thinly populated affluent suburbs light up."
+
+[[layer]]
+name = "Households in houses"
+expr = "men_mais"
+note = "Best available proxy for driveway/garage and two-car households."
+
+[[candidate]]
+name = "VifNet"
+at   = [45.77616, 3.06373]

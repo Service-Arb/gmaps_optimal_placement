@@ -1,5 +1,5 @@
-/* Drives the built map.html in headless Chromium over CDP and asserts the
-   model actually produces sane numbers. Run: node smoke.js <url> */
+/* Drives the built map in headless Chromium over CDP and asserts the model
+   actually produces sane numbers. Run: node smoke.js <url> */
 const { spawn } = require("node:child_process");
 const assert = require("node:assert");
 
@@ -56,7 +56,7 @@ async function main() {
     return {
       cells: N, comps: COMPS.length, liveMarkers: live.length,
       shown: shown.reduce((a, b) => a + b, 0),
-      pop: [...pop].reduce((a, b) => a + b, 0),
+      pop: layerByName('Population').arr().reduce((a, b) => a + b, 0),
       pressNZ: nz(press), demandNZ: nz(demand),
       canvas: [cv.width, cv.height],
       painted: (() => { const d = ctx.getImageData(0, 0, cv.width, cv.height).data;
@@ -76,16 +76,26 @@ async function main() {
   // pressure must fall when washes are dropped, and rise with a wider catchment
   const sens = await evaluate(`(() => {
     const sum = a => [...a].reduce((x, y) => x + y, 0);
+    const wash = TIERS.find(t => t.name === 'wash');
     const base = sum(press);
-    showWash = false; refresh(); const noWash = sum(press);
-    showWash = true; lambda = 4000; refresh(); const wide = sum(press);
-    lambda = 2000; refresh();
+    wash.show = false; refresh(); const noWash = sum(press);
+    wash.show = true; lambda = 4000; refresh(); const wide = sum(press);
+    lambda = D.lambda_m; refresh();
     return { base, noWash, wide, restored: sum(press) };
   })()`);
   console.log("sensitivity:", sens);
   assert(sens.noWash < sens.base, "dropping washes must lower pressure");
   assert(sens.wide > sens.base, "wider λ must raise pressure");
   assert(Math.abs(sens.restored - sens.base) < 1e-6, "recompute is deterministic");
+
+  // configured candidates are pinned at load and comparable against each other
+  const cands = await evaluate(`(() => {
+    compareCandidates();
+    return { n: D.candidates.length, pins: pins.length, report: document.getElementById('report').innerText.slice(0, 300) };
+  })()`);
+  assert.equal(cands.pins, cands.n, "one pin per [[candidate]]");
+  assert(cands.report.includes("VifNet"), "candidate comparison names the candidate");
+  console.log("---- candidates ----\n" + cands.report);
 
   // site scoring + ranking
   const rank = await evaluate(`(() => {
