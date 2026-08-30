@@ -43,14 +43,39 @@
           text = ''
             cd "$(git rev-parse --show-toplevel)"
             config="''${1:-examples/clermont_detailing/config.toml}"
-            cargo run -p service_arb -- "$config"
-            name="$(basename "$config" .toml)"
             out="''${SERVICE_ARB_WORK:-tmp/geo}/out"
+            cargo run -p service_arb -- "$config" --out "$out/map.html"
             fuser -k ${toString port}/tcp 2>/dev/null || true
             (cd "$out" && python3 -m http.server ${toString port} >/dev/null 2>&1 &)
             sleep 1
-            node examples/clermont_detailing/smoke.js "http://localhost:${toString port}/$name.html"
+            node examples/clermont_detailing/smoke.js "http://localhost:${toString port}/map.html"
             fuser -k ${toString port}/tcp 2>/dev/null || true
+          '';
+        };
+        # `open <path/to/config.toml>` — build the map, serve it, open in the desktop browser.
+        open = pkgs.writeShellApplication {
+          name = "open-map";
+          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold python3 psmisc xdg-utils ];
+          text = ''
+            cd "$(git rev-parse --show-toplevel)"
+            config="''${1:-examples/clermont_detailing/config.toml}"
+            out="''${SERVICE_ARB_WORK:-tmp/geo}/out"
+            cargo run -p service_arb -- "$config" --out "$out/map.html"
+            fuser -k ${toString port}/tcp 2>/dev/null || true
+            xdg-open "http://localhost:${toString port}/map.html" &
+            cd "$out" && python3 -m http.server ${toString port}
+          '';
+        };
+
+        help = pkgs.writeShellApplication {
+          name = "help";
+          text = ''
+            cat <<'EOF'
+            nix run .#open  [config.toml]  open the built map in your browser (serves on :${toString port}, Ctrl-C to stop)
+            nix run .#study [config.toml]  build the map and assert its numbers in headless Chromium
+            nix run .#help                 this
+            defaults to examples/clermont_detailing/config.toml; output under $SERVICE_ARB_WORK (default tmp/geo)
+            EOF
           '';
         };
       in
@@ -58,6 +83,8 @@
         apps = {
           default = { type = "app"; program = pkgs.lib.getExe study; };
           study = { type = "app"; program = pkgs.lib.getExe study; };
+          open = { type = "app"; program = pkgs.lib.getExe open; };
+          help = { type = "app"; program = pkgs.lib.getExe help; };
         };
 
         packages.default =
