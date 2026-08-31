@@ -1,9 +1,11 @@
 /* Drives the built map in headless Chromium over CDP and asserts the model
-   actually produces sane numbers. Run: node smoke.js <url> */
+   actually produces sane numbers. Run: node smoke.js <url> [search line] */
 const { spawn } = require("node:child_process");
 const assert = require("node:assert");
 
 const URL_ = process.argv[2] || "http://localhost:8731/map.html";
+// 140 is a property of this config's own query line, so it only holds when nothing overrode it.
+const WANT_COMPS = process.argv[3] ? null : 140;
 const PORT = 9333;
 
 const chrome = spawn("chromium", [
@@ -65,8 +67,9 @@ async function main() {
   })()`);
   console.log("state:", s);
 
-  assert.equal(s.comps, 140, "competitor count");
-  assert.equal(s.liveMarkers, 140, "all competitor markers attached to the map");
+  if (WANT_COMPS !== null) assert.equal(s.comps, WANT_COMPS, "competitor count");
+  assert(s.comps > 0, "the search line found no competitor at all");
+  assert.equal(s.liveMarkers, s.comps, "all competitor markers attached to the map");
   assert(s.cells > 9000, "grid loaded");
   assert(s.shown > 5000, `${s.shown} cells coloured`);
   assert(Math.abs(s.pop - 454985) < 50, `population total ${s.pop}`);
