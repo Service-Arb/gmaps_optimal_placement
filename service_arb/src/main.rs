@@ -1,47 +1,67 @@
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use eyre::Result;
 use service_arb_sources::Work;
 
 #[derive(Parser)]
 #[command(about = "Paint a study's demand model over the competitors already on the ground")]
 struct Cli {
-	/// The study document
-	config: Option<PathBuf>,
-	/// Where the map goes; defaults to `<work dir>/out/<study name>.html`
-	#[arg(short, long)]
-	out: Option<PathBuf>,
-	/// Print the config JSON schema and exit
-	#[arg(long)]
-	schema: bool,
+	#[command(subcommand)]
+	cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+	/// Where the people are: demand under the competitors, as one HTML map
+	Map {
+		config: PathBuf,
+		/// Defaults to `<work dir>/out/<study name>.html`
+		#[arg(short, long)]
+		out: Option<PathBuf>,
+	},
+	/// How many people ask for it: monthly volume per query group, as one HTML chart
+	Searches {
+		config: PathBuf,
+		/// Defaults to `<work dir>/out/<study name>-searches.html`
+		#[arg(short, long)]
+		out: Option<PathBuf>,
+	},
+	/// Print the study document's JSON schema
+	Schema,
 }
 
 fn main() -> Result<()> {
 	color_eyre::install()?;
-	let cli = Cli::parse();
-	if cli.schema {
-		println!("{}", serde_json::to_string_pretty(&schemars::schema_for!(service_arb::Study))?);
-		return Ok(());
-	}
-	let Some(config) = cli.config else {
-		<Cli as clap::CommandFactory>::command().print_help()?;
-		return Ok(());
+	let work = Work::from_env();
+	let (out, html, default) = match Cli::parse().cmd {
+		Cmd::Schema => {
+			println!("{}", serde_json::to_string_pretty(&schemars::schema_for!(service_arb::Study))?);
+			return Ok(());
+		}
+		Cmd::Map { config, out } => {
+			let payload = service_arb::load(&config)?.build(&work)?;
+			report(service_arb::stats(&payload));
+			(out, service_arb::render::render(&payload)?, format!("{}.html", payload.name))
+		}
+		Cmd::Searches { config, out } => {
+			let payload = service_arb::load(&config)?.searches(&work)?;
+			report(service_arb::search_stats(&payload));
+			(out, service_arb::render::render_searches(&payload)?, format!("{}-searches.html", payload.name))
+		}
 	};
 
-	let study = service_arb::load(&config)?;
-	let work = Work::from_env();
-	let payload = study.build(&work)?;
-	for (k, v) in service_arb::stats(&payload) {
-		eprintln!("  {k}: {v}");
-	}
-
-	let out = cli.out.unwrap_or_else(|| work.path().join("out").join(format!("{}.html", payload.name)));
+	let out = out.unwrap_or_else(|| work.path().join("out").join(default));
 	if let Some(dir) = out.parent() {
 		std::fs::create_dir_all(dir)?;
 	}
-	let html = service_arb::render::render(&payload)?;
 	std::fs::write(&out, &html)?;
 	eprintln!("wrote {} ({:.1} MB)", out.display(), html.len() as f64 / 1e6);
 	Ok(())
+}
+
+fn report(stats: indexmap::IndexMap<String, String>) {
+	for (k, v) in stats {
+		eprintln!("  {k}: {v}");
+	}
 }

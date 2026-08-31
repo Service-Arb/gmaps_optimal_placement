@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use service_arb_core::grid::Bbox;
 use service_arb_sources::{GridSource, PoiConfig};
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Study {
 	pub name: String,
@@ -20,13 +20,17 @@ pub struct Study {
 	pub model: Model,
 	#[serde(rename = "layer")]
 	pub layers: Vec<Layer>,
+	/// Optional: the map answers where the people are, this answers how many of them ask for the
+	/// thing. A study without it simply has no `searches` command.
+	#[serde(default)]
+	pub searches: Option<Searches>,
 	/// Addresses the study is actually about. The usual question is "is *this* one good", not only
 	/// "where is best".
 	#[serde(default, rename = "candidate")]
 	pub candidates: Vec<Candidate>,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Area {
 	pub bbox: Bbox,
@@ -35,14 +39,14 @@ pub struct Area {
 	pub zoom: u8,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GridSpec {
 	pub source: GridSource,
 	pub vintage: u16,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Model {
 	/// Per cell, over the grid's columns.
@@ -53,7 +57,7 @@ pub struct Model {
 	pub lambda_m: f64,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Scale {
 	/// Rank, not magnitude — these quantities are heavy-tailed and a linear ramp shows one hot pixel.
@@ -62,14 +66,14 @@ pub enum Scale {
 	Linear,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Column {
 	pub name: String,
 	pub expr: String,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Layer {
 	pub name: String,
@@ -80,7 +84,36 @@ pub struct Layer {
 	pub note: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Searches {
+	/// `google_ads` or `dataforseo`.
+	pub provider: String,
+	/// A Google canonical location name, e.g. `Clermont-Ferrand,Auvergne-Rhone-Alpes,France`.
+	/// DataForSEO's `location_name` format is the same string.
+	pub place: String,
+	/// ISO-639-1.
+	pub language: String,
+	#[serde(rename = "group")]
+	pub groups: Vec<Group>,
+}
+
+/// One line on the chart: an intent, asked for in however many words people ask for it in.
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Group {
+	pub name: String,
+	/// What the provider expands semantically around.
+	pub seed: Vec<String>,
+	/// Case-insensitive regex over the expansion. Omitted keeps all of it.
+	#[serde(default, rename = "match")]
+	pub pattern: Option<String>,
+	/// Checked before `match` — expansion drags in intent that is not demand.
+	#[serde(default)]
+	pub drop: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Candidate {
 	pub name: String,

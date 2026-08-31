@@ -26,6 +26,10 @@
           lastSupportedVersion = "nightly-2026-07-14";
           jobs.default = true;
           lfs = false;
+          labels.extra = [
+            { name = "reviews"; color = "0000ff"; description = "Anythin pertaining to improving review scoring"; }
+          ];
+
         };
         readme = v_flakes.readme-fw {
           inherit pkgs pname;
@@ -44,7 +48,7 @@
             cd "$(git rev-parse --show-toplevel)"
             config="''${1:-examples/clermont_detailing/config.nix}"
             out="''${SERVICE_ARB_WORK:-tmp/geo}/out"
-            cargo run -p service_arb -- "$config" --out "$out/map.html"
+            cargo run -p service_arb -- map "$config" --out "$out/map.html"
             fuser -k ${toString port}/tcp 2>/dev/null || true
             (cd "$out" && python3 -m http.server ${toString port} >/dev/null 2>&1 &)
             sleep 1
@@ -60,9 +64,23 @@
             cd "$(git rev-parse --show-toplevel)"
             config="''${1:-examples/clermont_detailing/config.nix}"
             out="''${SERVICE_ARB_WORK:-tmp/geo}/out"
-            cargo run -p service_arb -- "$config" --out "$out/map.html"
+            cargo run -p service_arb -- map "$config" --out "$out/map.html"
             fuser -k ${toString port}/tcp 2>/dev/null || true
             xdg-open "http://localhost:${toString port}/map.html" &
+            cd "$out" && python3 -m http.server ${toString port}
+          '';
+        };
+        # `searches <path/to/config.nix>` — build the volume chart, serve it, open it.
+        searches = pkgs.writeShellApplication {
+          name = "open-searches";
+          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold python3 psmisc xdg-utils nix ];
+          text = ''
+            cd "$(git rev-parse --show-toplevel)"
+            config="''${1:-examples/clermont_detailing/config.nix}"
+            out="''${SERVICE_ARB_WORK:-tmp/geo}/out"
+            cargo run -p service_arb -- searches "$config" --out "$out/searches.html"
+            fuser -k ${toString port}/tcp 2>/dev/null || true
+            xdg-open "http://localhost:${toString port}/searches.html" &
             cd "$out" && python3 -m http.server ${toString port}
           '';
         };
@@ -71,12 +89,13 @@
           name = "help";
           text = ''
             cat <<'EOF'
-            nix run .#open  [study.nix]  open the built map in your browser (serves on :${toString port}, Ctrl-C to stop)
-            nix run .#study [study.nix]  build the map and assert its numbers in headless Chromium
-            nix run .#help               this
+            nix run .#open     [study.nix]  open the built map in your browser (serves on :${toString port}, Ctrl-C to stop)
+            nix run .#searches [study.nix]  open the monthly search-volume chart for the study's query groups
+            nix run .#study    [study.nix]  build the map and assert its numbers in headless Chromium
+            nix run .#help                  this
             the study defaults to examples/clermont_detailing/config.nix; output under $SERVICE_ARB_WORK (default tmp/geo)
-            a study is a Nix file evaluating to the attrset `service_arb --schema` describes: area, grid,
-            poi (queries + weighted tiers), columns, model, layers, candidates.
+            a study is a Nix file evaluating to the attrset `service_arb schema` describes: area, grid,
+            poi (queries + weighted tiers), column, model, layer, candidate, and an optional searches block.
             EOF
           '';
         };
@@ -86,6 +105,7 @@
           default = { type = "app"; program = pkgs.lib.getExe study; };
           study = { type = "app"; program = pkgs.lib.getExe study; };
           open = { type = "app"; program = pkgs.lib.getExe open; };
+          searches = { type = "app"; program = pkgs.lib.getExe searches; };
           help = { type = "app"; program = pkgs.lib.getExe help; };
         };
 

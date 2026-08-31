@@ -5,8 +5,13 @@
 | `insee_filosofi_200m` | France | 200 m | households, housing type, standard of living |
 | `geostat_1km` | EU | 1 km | census counts by age, sex, employment, origin |
 
+| `searches.provider` | Credentials | Notes |
+|---|---|---|
+| `google_ads` | `GOOGLE_ADS_*` | Keyword Planner at the source; needs Basic API access |
+| `dataforseo` | `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD` | the same numbers, resold per call |
+
 ## Expressions
 
-`[columns]`, `[model]` and `[[layer]]` are arithmetic over the column names the chosen source
-publishes, plus `max`, `min`, `clamp`, `sqrt` and `pow`. A name that does not exist is an error at
-load, against the source's own column list.
+`column`, `model` and `layer` are arithmetic over the column names the chosen source publishes,
+plus `max`, `min`, `clamp`, `sqrt` and `pow`. A name that does not exist is an error at load,
+against the source's own column list.

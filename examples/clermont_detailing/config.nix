@@ -93,6 +93,28 @@
     }
   ];
 
+  # `match` / `drop` are the same vocabulary as `poi.tier` / `poi.drop`: case-insensitive regex,
+  # `drop` checked first. The expansion is fuzzy and drags in intent that is not demand.
+  searches = {
+    provider = "google_ads";
+    place = "Clermont-Ferrand,Auvergne-Rhone-Alpes,France";
+    language = "fr";
+
+    group = [
+      {
+        name = "detailing";
+        seed = [ "car detailing" "esthétique automobile" ];
+        match = "detail|esthetique|esthétique|polissage|céramique|ceramique|\\bppf\\b|covering";
+        drop = "emploi|salaire|formation|stage|jobs";
+      }
+      {
+        name = "lavage";
+        seed = [ "lavage auto" "station de lavage" ];
+        match = "lavage|wash|karcher|kärcher";
+      }
+    ];
+  };
+
   candidate = [
     { name = "VifNet"; at = [ 45.77616 3.06373 ]; }
   ];

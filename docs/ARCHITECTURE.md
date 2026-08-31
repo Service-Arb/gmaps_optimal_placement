@@ -15,8 +15,9 @@ document, never to the code.
    │   GridSource ─ INSEE Filosofi 200 m           │
    │               GEOSTAT 1 km                    │
    │   PoiSource  ─ Google Places                  │
+   │   SearchVolume ─ Google Ads · DataForSEO      │
    └───────────────┬───────────────────────────────┘
-                   │  cells + named columns, POIs + tiers
+                   │  cells + named columns, POIs + tiers, keyword series
    ┌───────────────┴───────────────────────────────┐
    │ service_arb_core           no I/O             │
    │   Reproject · CellId · Grid · Expr            │
@@ -26,8 +27,12 @@ document, never to the code.
    │ service_arb                CLI, config, HTML  │
    └───────────────┬───────────────────────────────┘
                    ▼
-              one map.html
+        one map.html · one <name>-searches.html
 ```
+
+The map answers where the people are. It does not answer how many are looking for the thing, which
+is what `searches` is for: a cell can be dense, affluent and uncontested and still sit under a trade
+nobody searches for.
 
 ## The line between baked and live
 
@@ -61,6 +66,21 @@ its archive rather than a struct per country. Expressions name those columns, an
 naming one that does not exist fails against the source's own column list before a single POI call
 is made.
 
+## Search-volume providers are a trait
+
+The set of providers is not closed: they differ on price, geography and honesty, and a new one is a
+purchase, not a country. So `searches::SearchVolume` is a trait, one file per implementation, and
+`searches::provider` is the one `match` that knows the set — the same containment the enums give,
+without pretending the set is compile-time known.
+
+They agree on the string that names a place, because DataForSEO's `location_name` format *is*
+Google's `canonicalName`. Switching provider is a one-word study edit.
+
+Grouping is by essence, not by string: a study names seeds, the provider expands them semantically,
+a regex filters that expansion and the survivors sum into one line. The expansion is fuzzy, so every
+member and its own series survives into the page — a sum you cannot audit is a sum you cannot argue
+with. A keyword the provider has no data for is excluded from the sum, never zero-filled.
+
 ## What a map like this cannot know
 
 These are not caveats about the implementation. They are the distance between the model and the
@@ -80,3 +100,13 @@ guess into authority. The worked example is `examples/clermont_detailing`.
   name does say.
 - **Every constant in a study is a guess with a sane magnitude**, not a fitted value. They are in
   the study file so they can be argued with.
+- **City-level search volumes are bucketed and small.** Keyword Planner rounds hard (0, 10, 20, 30,
+  50, 70, 90, 110…) and an account with no campaign spend gets the coarsest treatment. For a niche
+  trade in a 150k city, expect a line in the tens that moves in steps. The shape of the year is
+  trustworthy; the level is an order of magnitude, not a count.
+- **Summing an expansion overstates, and counts events not people.** Google already merges close
+  variants — plurals, accents, misspellings — into one keyword, so members are distinct queries and
+  the sum is defensible. But two phrasings of one intent still add, and a person who searches twice
+  is two searches.
+- **Search volume is not local demand.** It excludes everyone who finds a detailer through Maps
+  without a query, through a friend, or by driving past.

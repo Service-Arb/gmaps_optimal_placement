@@ -8,19 +8,19 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-service_arb_core.workspace = true
-service_arb_sources.workspace = true
-
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true, features = ["derive"] }
 color-eyre.workspace = true
 eyre.workspace = true
 indexmap.workspace = true
+regex.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+service_arb_core.workspace = true
+service_arb_sources.workspace = true
 
 [dev-dependencies]
-insta = "1"
+insta.workspace = true
 
 [lints]
 workspace = true
