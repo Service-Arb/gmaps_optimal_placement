@@ -8,14 +8,16 @@ use service_arb_core::grid::Bbox;
 
 use crate::work::Work;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+const FIELDS: &str = "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,\
+	places.types,places.primaryType,places.primaryTypeDisplayName,places.businessStatus,places.websiteUri,places.nationalPhoneNumber,nextPageToken";
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum PoiSource {
 	#[serde(rename = "google_places")]
 	GooglePlaces,
 }
 
 /// A name pattern, a set of source-native categories, or both — either one hits.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MatchSpec {
 	/// Case-insensitive regex over the display name.
@@ -24,8 +26,20 @@ pub struct MatchSpec {
 	#[serde(default)]
 	pub types: Vec<String>,
 }
+impl MatchSpec {
+	fn compile(&self) -> Result<Matcher> {
+		ensure!(self.pattern.is_some() || !self.types.is_empty(), "a match rule needs `match`, `types`, or both");
+		let pattern = self
+			.pattern
+			.as_deref()
+			.map(|p| Regex::new(&format!("(?i){p}")))
+			.transpose()
+			.wrap_err_with(|| format!("match pattern {:?}", self.pattern.as_deref().unwrap_or_default()))?;
+		Ok(Matcher { pattern, types: self.types.clone() })
+	}
+}
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Tier {
 	pub name: String,
@@ -35,7 +49,7 @@ pub struct Tier {
 	pub spec: MatchSpec,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PoiConfig {
 	pub source: PoiSource,
@@ -52,7 +66,7 @@ pub struct PoiConfig {
 	pub drop: Option<MatchSpec>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Poi {
 	pub id: String,
 	pub name: String,
@@ -80,33 +94,6 @@ impl Poi {
 	}
 }
 
-struct Matcher {
-	pattern: Option<Regex>,
-	types: Vec<String>,
-}
-
-impl MatchSpec {
-	fn compile(&self) -> Result<Matcher> {
-		ensure!(self.pattern.is_some() || !self.types.is_empty(), "a match rule needs `match`, `types`, or both");
-		let pattern = self
-			.pattern
-			.as_deref()
-			.map(|p| Regex::new(&format!("(?i){p}")))
-			.transpose()
-			.wrap_err_with(|| format!("match pattern {:?}", self.pattern.as_deref().unwrap_or_default()))?;
-		Ok(Matcher { pattern, types: self.types.clone() })
-	}
-}
-
-impl Matcher {
-	fn hits(&self, name: &str, kinds: &[&str]) -> bool {
-		self.pattern.as_ref().is_some_and(|r| r.is_match(name)) || kinds.iter().any(|k| self.types.iter().any(|t| t == k))
-	}
-}
-
-const FIELDS: &str = "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,\
-	places.types,places.primaryType,places.primaryTypeDisplayName,places.businessStatus,places.websiteUri,places.nationalPhoneNumber,nextPageToken";
-
 pub fn load(cfg: &PoiConfig, bbox: Bbox, work: &Work) -> Result<Vec<Poi>> {
 	let PoiSource::GooglePlaces = cfg.source;
 	let key = std::env::var("GOOGLE_MAPS_KEY").wrap_err("GOOGLE_MAPS_KEY is not set")?;
@@ -132,7 +119,11 @@ pub fn load(cfg: &PoiConfig, bbox: Bbox, work: &Work) -> Result<Vec<Poi>> {
 					if let Some(t) = &token {
 						body["pageToken"] = serde_json::Value::String(t.clone());
 					}
-					let res = work.cached_post("https://places.googleapis.com/v1/places:searchText", &body, &[("X-Goog-Api-Key", &key), ("X-Goog-FieldMask", FIELDS)])?;
+					let res = work.cached_post(
+						"https://places.googleapis.com/v1/places:searchText",
+						&body,
+						&[("X-Goog-Api-Key", &key), ("X-Goog-FieldMask", FIELDS)],
+					)?;
 					calls += 1;
 					if let Some(e) = res.get("error") {
 						bail!("Places text search {q:?}: {e}");
@@ -156,7 +147,9 @@ pub fn load(cfg: &PoiConfig, bbox: Bbox, work: &Work) -> Result<Vec<Poi>> {
 			None | Some("OPERATIONAL") => {}
 			Some(_) => continue,
 		}
-		let Some(name) = p["displayName"]["text"].as_str() else { bail!("Places result {id} has no display name: {p}") };
+		let Some(name) = p["displayName"]["text"].as_str() else {
+			bail!("Places result {id} has no display name: {p}")
+		};
 		let primary = p["primaryType"].as_str().unwrap_or_default();
 		let mut kinds: Vec<&str> = p["types"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str).collect();
 		kinds.push(primary);
@@ -165,7 +158,9 @@ pub fn load(cfg: &PoiConfig, bbox: Bbox, work: &Work) -> Result<Vec<Poi>> {
 		}
 		let Some((tier, _)) = tiers.iter().find(|(_, m)| m.hits(name, &kinds)) else { continue };
 		let (lat, lng) = (p["location"]["latitude"].as_f64(), p["location"]["longitude"].as_f64());
-		let (Some(lat), Some(lng)) = (lat, lng) else { bail!("Places result {name:?} has no location: {p}") };
+		let (Some(lat), Some(lng)) = (lat, lng) else {
+			bail!("Places result {name:?} has no location: {p}")
+		};
 		out.push(Poi {
 			id: id.clone(),
 			name: name.to_owned(),
@@ -184,4 +179,14 @@ pub fn load(cfg: &PoiConfig, bbox: Bbox, work: &Work) -> Result<Vec<Poi>> {
 	out.sort_by(|a, b| b.n_rev.total_cmp(&a.n_rev));
 	eprintln!("places: {} raw over {calls} calls, {} kept", raw.len(), out.len());
 	Ok(out)
+}
+struct Matcher {
+	pattern: Option<Regex>,
+	types: Vec<String>,
+}
+
+impl Matcher {
+	fn hits(&self, name: &str, kinds: &[&str]) -> bool {
+		self.pattern.as_ref().is_some_and(|r| r.is_match(name)) || kinds.iter().any(|k| self.types.iter().any(|t| t == k))
+	}
 }

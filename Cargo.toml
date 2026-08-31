@@ -14,18 +14,26 @@ readme = "README.md"
 float_cmp = "allow"
 len_zero = "allow"
 
+[workspace.lints.rust]
+unused_features = "allow"
+
 [workspace.dependencies]
 service_arb_core = { path = "service_arb_core", version = "0.1.0" }
 service_arb_sources = { path = "service_arb_sources", version = "0.1.0" }
 
+base64 = "0.22"
+clap = "4"
 color-eyre = "0.6"
+csv = "1"
+evalexpr = "13"
 eyre = "0.6"
 indexmap = { version = "2", features = ["serde"] }
+insta = "1"
+proj4rs = "0.1"
 regex = "1"
 schemars = { version = "1", features = ["indexmap2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-csv = "1"
 sha2 = "0.11"
 ureq = "3"
 zip = "8"

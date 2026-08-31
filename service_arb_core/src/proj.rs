@@ -11,7 +11,7 @@ pub struct Reproject {
 }
 
 impl Reproject {
-	pub fn new() -> Result<Self> {
+	pub fn try_new() -> Result<Self> {
 		Ok(Self {
 			laea: Proj::from_proj_string(LAEA).map_err(|e| eyre!("EPSG:3035 proj string: {e}"))?,
 			wgs84: Proj::from_proj_string(WGS84).map_err(|e| eyre!("EPSG:4326 proj string: {e}"))?,
@@ -44,7 +44,7 @@ mod tests {
 	/// Against PROJ's own answer for EPSG:3035 -> EPSG:4326.
 	#[test]
 	fn reference_point() {
-		let r = Reproject::new().unwrap();
+		let r = Reproject::try_new().unwrap();
 		let (lon, lat) = r.to_wgs84(3945600., 2513800.).unwrap();
 		assert!((lon - 5.189070396012167).abs() < EPS_DEG, "lon {lon}");
 		assert!((lat - 45.62762410095679).abs() < EPS_DEG, "lat {lat}");
@@ -52,7 +52,7 @@ mod tests {
 
 	#[test]
 	fn round_trip() {
-		let r = Reproject::new().unwrap();
+		let r = Reproject::try_new().unwrap();
 		for (lon, lat) in [(3.0863, 45.7797), (10.0, 52.0), (-9.1, 38.7), (24.9, 60.2)] {
 			let (x, y) = r.to_laea(lon, lat).unwrap();
 			let (lon2, lat2) = r.to_wgs84(x, y).unwrap();
@@ -63,7 +63,7 @@ mod tests {
 	/// The LAEA origin is the one point whose expected value needs no reference table.
 	#[test]
 	fn false_origin() {
-		let r = Reproject::new().unwrap();
+		let r = Reproject::try_new().unwrap();
 		let (x, y) = r.to_laea(10.0, 52.0).unwrap();
 		assert!((x - 4321000.).abs() < 1e-6 && (y - 3210000.).abs() < 1e-6, "({x}, {y})");
 	}

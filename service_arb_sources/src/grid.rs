@@ -3,7 +3,7 @@
 //! Both catalogued sources encode the cell corner in its id, so the whole difference between them
 //! is the [`Archive`] table below: where the file is, which columns are text, and which one carries
 //! provenance.
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use eyre::{Result, WrapErr, bail, ensure};
 use schemars::JsonSchema;
@@ -15,7 +15,7 @@ use service_arb_core::{
 
 use crate::work::Work;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum GridSource {
 	/// INSEE Filosofi — France, 200 m, households / housing type / standard of living.
 	#[serde(rename = "insee_filosofi_200m")]
@@ -24,19 +24,6 @@ pub enum GridSource {
 	#[serde(rename = "geostat_1km")]
 	Geostat1km,
 }
-
-struct Archive {
-	url: &'static str,
-	member: &'static str,
-	id_col: &'static str,
-	place_col: &'static str,
-	/// 1 where the row is modelled rather than observed.
-	imputed_col: Option<&'static str>,
-	/// Everything else in the header must parse as a number, for every cell.
-	text_cols: &'static [&'static str],
-	res_m: u32,
-}
-
 impl GridSource {
 	fn archive(self, vintage: u16) -> Result<Archive> {
 		Ok(match (self, vintage) {
@@ -65,7 +52,7 @@ impl GridSource {
 
 pub fn load(source: GridSource, vintage: u16, bbox: Bbox, work: &Work) -> Result<Grid> {
 	let a = source.archive(vintage)?;
-	let proj = Reproject::new()?;
+	let proj = Reproject::try_new()?;
 	let [x0, y0, x1, y1] = bbox.to_laea(&proj)?;
 
 	let path = work.archive(a.url)?;
@@ -75,7 +62,12 @@ pub fn load(source: GridSource, vintage: u16, bbox: Bbox, work: &Work) -> Result
 	let mut rdr = csv::ReaderBuilder::new().from_reader(std::io::BufReader::with_capacity(1 << 20, member));
 
 	let header: Vec<String> = rdr.headers()?.iter().map(str::to_owned).collect();
-	let at = |name: &str| header.iter().position(|h| h == name).ok_or_else(|| eyre::eyre!("{:?} has no column {name:?}; header is {}", a.member, header.join(", ")));
+	let at = |name: &str| {
+		header
+			.iter()
+			.position(|h| h == name)
+			.ok_or_else(|| eyre::eyre!("{:?} has no column {name:?}; header is {}", a.member, header.join(", ")))
+	};
 	let (i_id, i_place) = (at(a.id_col)?, at(a.place_col)?);
 	let i_imputed = a.imputed_col.map(&at).transpose()?;
 	for t in a.text_cols {
@@ -109,7 +101,12 @@ pub fn load(source: GridSource, vintage: u16, bbox: Bbox, work: &Work) -> Result
 			},
 			None => false,
 		};
-		let cell = Cell { id: id.to_owned(), place: row[i_place].split(',').next().unwrap_or_default().to_owned(), ring: cell.ring(&proj)?, imputed };
+		let cell = Cell {
+			id: id.to_owned(),
+			place: row[i_place].split(',').next().unwrap_or_default().to_owned(),
+			ring: cell.ring(&proj)?,
+			imputed,
+		};
 		grid.push(cell, &values)?;
 	}
 	eprintln!("{:?}: scanned {scanned} cells, kept {}", a.member, grid.len());
@@ -120,22 +117,39 @@ pub fn load(source: GridSource, vintage: u16, bbox: Bbox, work: &Work) -> Result
 	}
 	Ok(grid)
 }
+struct Archive {
+	url: &'static str,
+	member: &'static str,
+	id_col: &'static str,
+	place_col: &'static str,
+	/// 1 where the row is modelled rather than observed.
+	imputed_col: Option<&'static str>,
+	/// Everything else in the header must parse as a number, for every cell.
+	text_cols: &'static [&'static str],
+	res_m: u32,
+}
 
 /// INSEE's `lcog_geo` is a commune code. The map wants the name.
 fn name_communes(grid: &mut Grid, work: &Work) -> Result<()> {
 	let mut names: HashMap<String, String> = HashMap::new();
-	let depts: std::collections::BTreeSet<&str> = grid.cells.iter().map(|c| &c.place[..2]).collect();
+	let depts: BTreeSet<&str> = grid.cells.iter().map(|c| &c.place[..2]).collect();
 	for d in depts {
 		let url = format!("https://geo.api.gouv.fr/departements/{d}/communes?fields=nom");
-		for c in work.cached_get(&url, &format!("communes_{d}.json"))?.as_array().ok_or_else(|| eyre::eyre!("{url} did not return an array"))? {
+		for c in work
+			.cached_get(&url, &format!("communes_{d}.json"))?
+			.as_array()
+			.ok_or_else(|| eyre::eyre!("{url} did not return an array"))?
+		{
 			let (code, nom) = (c["code"].as_str(), c["nom"].as_str());
-			let (Some(code), Some(nom)) = (code, nom) else { bail!("{url} returned a commune without code and nom: {c}") };
+			let (Some(code), Some(nom)) = (code, nom) else {
+				bail!("{url} returned a commune without code and nom: {c}")
+			};
 			names.insert(code.to_owned(), nom.to_owned());
 		}
 	}
 	// A grid vintage is fixed; the commune list is current. Codes retired by a merger since keep
 	// their code as the label — this names a cell, it does not feed the model.
-	let mut retired = std::collections::BTreeSet::new();
+	let mut retired = BTreeSet::new();
 	for cell in &mut grid.cells {
 		match names.get(&cell.place) {
 			Some(name) => cell.place = name.clone(),

@@ -8,10 +8,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-evalexpr = "13"
+evalexpr.workspace = true
 eyre.workspace = true
 indexmap.workspace = true
-proj4rs = "0.1"
+proj4rs.workspace = true
 schemars.workspace = true
 serde.workspace = true
 

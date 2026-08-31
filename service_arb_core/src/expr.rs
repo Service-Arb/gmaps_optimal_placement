@@ -11,7 +11,7 @@ type Tree = Node<DefaultNumericTypes>;
 type Ctx = HashMapContext<DefaultNumericTypes>;
 type Registered = (&'static str, usize, fn(&[f64]) -> f64);
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct Expr {
 	src: String,
 	tree: Tree,
@@ -33,7 +33,9 @@ impl Expr {
 		let mut ctx = context()?;
 		let mut bound = Vec::with_capacity(self.vars.len());
 		for name in &self.vars {
-			let col = columns.get(name).ok_or_else(|| eyre!("expression {:?} reads unknown column {name:?}; source has: {}", self.src, list(columns)))?;
+			let col = columns
+				.get(name)
+				.ok_or_else(|| eyre!("expression {:?} reads unknown column {name:?}; source has: {}", self.src, list(columns)))?;
 			if col.len() != rows {
 				bail!("column {name:?} has {} values, grid has {rows} cells", col.len());
 			}
@@ -58,7 +60,9 @@ impl Expr {
 	pub fn eval_row(&self, values: &IndexMap<String, f64>) -> Result<f64> {
 		let mut ctx = context()?;
 		for name in &self.vars {
-			let v = values.get(name).ok_or_else(|| eyre!("expression {:?} reads unknown field {name:?}; available: {}", self.src, list(values)))?;
+			let v = values
+				.get(name)
+				.ok_or_else(|| eyre!("expression {:?} reads unknown field {name:?}; available: {}", self.src, list(values)))?;
 			ctx.set_value(name.to_owned(), Value::Float(*v)).map_err(|e| eyre!("binding {name}: {e}"))?;
 		}
 		let v = self.tree.eval_with_context(&ctx).map_err(|e| eyre!("expression {:?}: {e}", self.src))?;

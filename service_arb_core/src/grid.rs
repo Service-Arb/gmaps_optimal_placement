@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::proj::Reproject;
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bbox {
 	/// [south, north], degrees
@@ -32,7 +32,7 @@ impl Bbox {
 }
 
 /// SW corner of an EPSG:3035 cell, as encoded in `CRS3035RES{res}mN{north}E{east}`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CellId {
 	pub res_m: u32,
 	pub north: i64,
@@ -45,7 +45,11 @@ impl CellId {
 		let (res, rest) = rest.split_once('m').ok_or_else(|| eyre::eyre!("cell id {s:?} has no resolution"))?;
 		let rest = rest.strip_prefix('N').ok_or_else(|| eyre::eyre!("cell id {s:?} has no northing"))?;
 		let (north, east) = rest.split_once('E').ok_or_else(|| eyre::eyre!("cell id {s:?} has no easting"))?;
-		Ok(Self { res_m: res.parse()?, north: north.parse()?, east: east.parse()? })
+		Ok(Self {
+			res_m: res.parse()?,
+			north: north.parse()?,
+			east: east.parse()?,
+		})
 	}
 
 	/// Cell outline, SW -> SE -> NE -> NW, as (lon, lat) degrees.
@@ -60,7 +64,7 @@ impl CellId {
 	}
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Cell {
 	pub id: String,
 	/// Human label from the source's own administrative column; "" when it publishes none.
@@ -70,7 +74,7 @@ pub struct Cell {
 	pub imputed: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Grid {
 	pub cells: Vec<Cell>,
 	pub columns: IndexMap<String, Vec<f64>>,
@@ -94,7 +98,9 @@ impl Grid {
 		}
 		ensure!(row.len() == self.columns.len(), "row has {} columns, grid has {}", row.len(), self.columns.len());
 		for (name, v) in row {
-			let Some(col) = self.columns.get_mut(*name) else { bail!("column {name:?} absent from the first row") };
+			let Some(col) = self.columns.get_mut(*name) else {
+				bail!("column {name:?} absent from the first row")
+			};
 			ensure!(col.len() == n, "column {name:?} appears twice in one row");
 			col.push(*v);
 		}
@@ -109,9 +115,30 @@ mod tests {
 
 	#[test]
 	fn ids_at_both_resolutions() {
-		assert_eq!(CellId::parse("CRS3035RES200mN2029400E4259000").unwrap(), CellId { res_m: 200, north: 2029400, east: 4259000 });
-		assert_eq!(CellId::parse("CRS3035RES1000mN2683000E4285000").unwrap(), CellId { res_m: 1000, north: 2683000, east: 4285000 });
-		assert_eq!(CellId::parse("CRS3035RES32000mN2016000E4256000").unwrap(), CellId { res_m: 32000, north: 2016000, east: 4256000 });
+		assert_eq!(
+			CellId::parse("CRS3035RES200mN2029400E4259000").unwrap(),
+			CellId {
+				res_m: 200,
+				north: 2029400,
+				east: 4259000
+			}
+		);
+		assert_eq!(
+			CellId::parse("CRS3035RES1000mN2683000E4285000").unwrap(),
+			CellId {
+				res_m: 1000,
+				north: 2683000,
+				east: 4285000
+			}
+		);
+		assert_eq!(
+			CellId::parse("CRS3035RES32000mN2016000E4256000").unwrap(),
+			CellId {
+				res_m: 32000,
+				north: 2016000,
+				east: 4256000
+			}
+		);
 		for bad in ["CRS3035RES200mN2029400", "1kmN123E456", "CRS3035RES200mNxxxE4259000"] {
 			assert!(CellId::parse(bad).is_err(), "{bad} parsed");
 		}
@@ -119,7 +146,7 @@ mod tests {
 
 	#[test]
 	fn ring_is_a_cell_of_the_stated_size() {
-		let proj = Reproject::new().unwrap();
+		let proj = Reproject::try_new().unwrap();
 		let ring = CellId::parse("CRS3035RES200mN2513800E3945600").unwrap().ring(&proj).unwrap();
 		assert!((ring[0][0] - 5.189070396012167).abs() < 1e-9, "SW corner is the id corner: {:?}", ring[0]);
 		// 200 m of northing at 45.6 deg is 200/111320 deg of latitude, within LAEA's local distortion

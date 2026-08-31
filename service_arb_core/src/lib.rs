@@ -1,3 +1,4 @@
+#![feature(default_field_values)]
 #![doc = include_str!("../README.md")]
 
 pub mod expr;
