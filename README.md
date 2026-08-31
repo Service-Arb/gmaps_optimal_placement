@@ -21,7 +21,7 @@ cargo install --path service_arb
 export GOOGLE_MAPS_KEY=...
 
 # Write the map. Bulk archives and API responses cache in $SERVICE_ARB_WORK (default ./tmp/geo).
-service_arb examples/clermont_detailing/config.toml
+service_arb examples/clermont_detailing/config.nix
 
 # Show the schema of the study document.
 service_arb --schema
@@ -29,7 +29,7 @@ service_arb --schema
 
 ## Sources
 
-| `[grid] source` | Area | Cell | Publishes |
+| `grid.source` | Area | Cell | Publishes |
 |---|---|---|---|
 | `insee_filosofi_200m` | France | 200 m | households, housing type, standard of living |
 | `geostat_1km` | EU | 1 km | census counts by age, sex, employment, origin |

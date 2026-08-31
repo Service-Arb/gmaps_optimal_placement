@@ -1,12 +1,12 @@
 # Clermont-Ferrand — car detailing site selection
 
-The study is [`config.toml`](config.toml). There is no code here.
+The study is [`config.nix`](config.nix). There is no code here.
 
 ```fish
-nix run .#study examples/clermont_detailing/config.toml
+nix run .#study examples/clermont_detailing/config.nix
 ```
 
-builds `tmp/geo/out/clermont_detailing.html` — Google Maps basemap, competitors on it, INSEE 200 m
+builds `tmp/geo/out/map.html` — Google Maps basemap, competitors on it, INSEE 200 m
 socio-economic grid painted over the top — and then drives it in headless Chromium.
 
 ```
@@ -16,7 +16,7 @@ INSEE Filosofi 2021           Google Places API (New)
    v                             v
 10 446 cells  ------------.  .---------- 140 shops (46 detailing, 94 wash)
 455 k people               \/
-                    clermont_detailing.html   1.3 MB, no server needed
+                            map.html          1.3 MB, no server needed
 ```
 
 ## What the map gives you
@@ -34,7 +34,7 @@ filters per tier, hide imputed cells.
 
 - **Click anywhere** → capture score, demand within 1 / 3 km, nearest competitor of each tier,
   counts within 2 / 5 km.
-- **Compare candidates** → the `[[candidate]]` addresses side by side.
+- **Compare candidates** → the `candidate` addresses side by side.
 - **Rank top 10 sites** → Huff-style sweep over ~2 600 candidate cells, greedy pick kept ≥1.5 km
   apart.
 
@@ -48,8 +48,8 @@ Clermont scores high on people and low on opportunity: 6 detailers within 2 km a
 first competitor fetch cost 89 Places text-search calls and is cached, so editing the tiering rules
 costs nothing.
 
-Retarget another city by copying `config.toml` and editing `[area]`. Retarget another trade by
-editing `[poi]` and `[model]`.
+Retarget another city by copying `config.nix` and editing `area`. Retarget another trade by editing
+`poi` and `model`.
 
 ## What this model does not know
 

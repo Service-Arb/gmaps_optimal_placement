@@ -18,7 +18,6 @@ indexmap.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-toml = "1"
 
 [dev-dependencies]
 insta = "1"

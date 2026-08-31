@@ -12,7 +12,7 @@ use service_arb_sources::Work;
 #[test]
 fn clermont_centre() {
 	let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("crate lives in the workspace");
-	let mut study: Study = service_arb::load(&root.join("examples/clermont_detailing/config.toml")).unwrap();
+	let mut study: Study = service_arb::load(&root.join("examples/clermont_detailing/config.nix")).unwrap();
 	study.area = Area { bbox: Bbox { lat: [45.770, 45.790], lon: [3.050, 3.090] }, ..study.area };
 
 	let c = study.cells(&Work::at(root.join("tmp/geo"))).unwrap();

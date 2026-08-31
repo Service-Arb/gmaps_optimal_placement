@@ -70,10 +70,10 @@ impl Study {
 		let mut grid = grid::load(self.grid.source, self.grid.vintage, self.area.bbox, work)?;
 		let n = grid.len();
 
-		for (name, src) in &self.columns {
-			ensure!(!grid.columns.contains_key(name), "derived column {name:?} is already published by the source");
-			let values = Expr::parse(src)?.eval_column(&grid.columns, n).wrap_err_with(|| format!("derived column {name:?}"))?;
-			grid.columns.insert(name.clone(), values);
+		for c in &self.columns {
+			ensure!(!grid.columns.contains_key(&c.name), "derived column {:?} is already published by the source", c.name);
+			let values = Expr::parse(&c.expr)?.eval_column(&grid.columns, n).wrap_err_with(|| format!("derived column {:?}", c.name))?;
+			grid.columns.insert(c.name.clone(), values);
 		}
 
 		let demand = Expr::parse(&self.model.demand)?.eval_column(&grid.columns, n).wrap_err("[model] demand")?;
@@ -130,8 +130,13 @@ impl Study {
 }
 
 pub fn load(path: &std::path::Path) -> Result<Study> {
-	let text = std::fs::read_to_string(path).wrap_err_with(|| format!("reading {}", path.display()))?;
-	let study: Study = toml::from_str(&text).wrap_err_with(|| format!("parsing {}", path.display()))?;
+	let out = std::process::Command::new("nix")
+		.args(["eval", "--json", "--file"])
+		.arg(path)
+		.output()
+		.wrap_err("running `nix eval` — a study is a Nix expression, so nix must be on PATH")?;
+	ensure!(out.status.success(), "evaluating {}:\n{}", path.display(), String::from_utf8_lossy(&out.stderr).trim());
+	let study: Study = serde_json::from_slice(&out.stdout).wrap_err_with(|| format!("parsing {}", path.display()))?;
 	if study.layers.is_empty() {
 		bail!("{} declares no [[layer]]", path.display());
 	}

@@ -36,31 +36,31 @@
         };
         combined = v_flakes.utils.combine { inherit rust; modules = [ rs github readme ]; };
 
-        # `study <path/to/config.toml> [search terms]` — build the map, then drive it in headless Chromium.
+        # `study <path/to/config.nix>` — build the map, then drive it in headless Chromium.
         study = pkgs.writeShellApplication {
           name = "study";
-          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold nodejs chromium psmisc ];
+          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold nodejs chromium psmisc nix ];
           text = ''
             cd "$(git rev-parse --show-toplevel)"
-            config="''${1:-examples/clermont_detailing/config.toml}"
+            config="''${1:-examples/clermont_detailing/config.nix}"
             out="''${SERVICE_ARB_WORK:-tmp/geo}/out"
-            cargo run -p service_arb -- "$config" --out "$out/map.html" ''${2:+--queries "$2"}
+            cargo run -p service_arb -- "$config" --out "$out/map.html"
             fuser -k ${toString port}/tcp 2>/dev/null || true
             (cd "$out" && python3 -m http.server ${toString port} >/dev/null 2>&1 &)
             sleep 1
-            node examples/clermont_detailing/smoke.js "http://localhost:${toString port}/map.html" "''${2:-}"
+            node examples/clermont_detailing/smoke.js "http://localhost:${toString port}/map.html"
             fuser -k ${toString port}/tcp 2>/dev/null || true
           '';
         };
-        # `open <path/to/config.toml> [search terms]` — build the map, serve it, open in the desktop browser.
+        # `open <path/to/config.nix>` — build the map, serve it, open in the desktop browser.
         open = pkgs.writeShellApplication {
           name = "open-map";
-          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold python3 psmisc xdg-utils ];
+          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold python3 psmisc xdg-utils nix ];
           text = ''
             cd "$(git rev-parse --show-toplevel)"
-            config="''${1:-examples/clermont_detailing/config.toml}"
+            config="''${1:-examples/clermont_detailing/config.nix}"
             out="''${SERVICE_ARB_WORK:-tmp/geo}/out"
-            cargo run -p service_arb -- "$config" --out "$out/map.html" ''${2:+--queries "$2"}
+            cargo run -p service_arb -- "$config" --out "$out/map.html"
             fuser -k ${toString port}/tcp 2>/dev/null || true
             xdg-open "http://localhost:${toString port}/map.html" &
             cd "$out" && python3 -m http.server ${toString port}
@@ -71,12 +71,12 @@
           name = "help";
           text = ''
             cat <<'EOF'
-            nix run .#open  [config.toml] ["term, term, ..."]  open the built map in your browser (serves on :${toString port}, Ctrl-C to stop)
-            nix run .#study [config.toml] ["term, term, ..."]  build the map and assert its numbers in headless Chromium
-            nix run .#help                                     this
-            config defaults to examples/clermont_detailing/config.toml; output under $SERVICE_ARB_WORK (default tmp/geo)
-            the search line replaces [poi].queries. [[poi.tier]] still comes from the config: search a trade
-            its tier patterns do not describe and every result is dropped as "not a competitor".
+            nix run .#open  [study.nix]  open the built map in your browser (serves on :${toString port}, Ctrl-C to stop)
+            nix run .#study [study.nix]  build the map and assert its numbers in headless Chromium
+            nix run .#help               this
+            the study defaults to examples/clermont_detailing/config.nix; output under $SERVICE_ARB_WORK (default tmp/geo)
+            a study is a Nix file evaluating to the attrset `service_arb --schema` describes: area, grid,
+            poi (queries + weighted tiers), columns, model, layers, candidates.
             EOF
           '';
         };

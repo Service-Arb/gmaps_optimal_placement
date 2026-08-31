@@ -1,6 +1,5 @@
 //! The study document. Not settings: there is no sane environment-variable spelling of `[[layer]]`,
 //! so it is plain `Deserialize` from a path, with a JSON schema for the editor.
-use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use service_arb_core::grid::Bbox;
@@ -14,9 +13,10 @@ pub struct Study {
 	pub grid: GridSpec,
 	pub poi: PoiConfig,
 	/// Columns the source does not publish, evaluated in order over the ones it does. Later entries
-	/// may read earlier ones.
-	#[serde(default)]
-	pub columns: IndexMap<String, String>,
+	/// may read earlier ones, so this is a list: an attribute set would be evaluated in whatever
+	/// order its names happen to sort in.
+	#[serde(default, rename = "column")]
+	pub columns: Vec<Column>,
 	pub model: Model,
 	#[serde(rename = "layer")]
 	pub layers: Vec<Layer>,
@@ -60,6 +60,13 @@ pub enum Scale {
 	#[default]
 	Percentile,
 	Linear,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Column {
+	pub name: String,
+	pub expr: String,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

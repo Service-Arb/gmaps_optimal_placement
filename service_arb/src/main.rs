@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use eyre::{Result, ensure};
+use eyre::Result;
 use service_arb_sources::Work;
 
 #[derive(Parser)]
@@ -12,10 +12,6 @@ struct Cli {
 	/// Where the map goes; defaults to `<work dir>/out/<study name>.html`
 	#[arg(short, long)]
 	out: Option<PathBuf>,
-	/// Comma-separated, replaces `poi.queries`. The tiers stay the config's: a trade the tier
-	/// patterns do not describe will drop every result it finds.
-	#[arg(short, long)]
-	queries: Option<String>,
 	/// Print the config JSON schema and exit
 	#[arg(long)]
 	schema: bool,
@@ -33,11 +29,7 @@ fn main() -> Result<()> {
 		return Ok(());
 	};
 
-	let mut study = service_arb::load(&config)?;
-	if let Some(line) = &cli.queries {
-		study.poi.queries = line.split(',').map(str::trim).filter(|q| !q.is_empty()).map(str::to_owned).collect();
-		ensure!(!study.poi.queries.is_empty(), "--queries {line:?} holds no search term");
-	}
+	let study = service_arb::load(&config)?;
 	let work = Work::from_env();
 	let payload = study.build(&work)?;
 	for (k, v) in service_arb::stats(&payload) {

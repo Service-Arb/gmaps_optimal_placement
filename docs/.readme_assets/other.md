@@ -1,6 +1,6 @@
 ## Sources
 
-| `[grid] source` | Area | Cell | Publishes |
+| `grid.source` | Area | Cell | Publishes |
 |---|---|---|---|
 | `insee_filosofi_200m` | France | 200 m | households, housing type, standard of living |
 | `geostat_1km` | EU | 1 km | census counts by age, sex, employment, origin |

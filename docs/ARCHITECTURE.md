@@ -1,6 +1,6 @@
 # service_arb
 
-Where should a service business open. One TOML file describes an area, a statistical grid, what
+Where should a service business open. One Nix file describes an area, a statistical grid, what
 counts as a competitor and how demand follows from whatever columns that grid publishes; the tool
 emits one self-contained HTML map that answers it.
 
@@ -8,7 +8,7 @@ The question is the input. Retargeting a city, a country or a trade is an edit t
 document, never to the code.
 
 ```
-              study.toml ── the pinned interface
+              study.nix ─── the pinned interface
                    │
    ┌───────────────┴───────────────────────────────┐
    │ service_arb_sources        network, cache     │
@@ -44,7 +44,7 @@ reproducibility.
 - **No fallbacks on missing or malformed data.** A cell that will not parse is an error, never a
   zero. Imputed-versus-observed provenance survives to the map.
 - **Config defines the model; code defines the mechanism.** Anything a study would want to vary
-  belongs in TOML. Anything two studies share belongs in Rust.
+  belongs in the study file. Anything two studies share belongs in Rust.
 - **The output is one file** that opens from disk with no server.
 - **The generated map embeds `GOOGLE_MAPS_KEY`; artifacts stay untracked.** Bulk archives and API
   responses cache under `SERVICE_ARB_WORK` (default `./tmp/geo`) so a rerun costs nothing — the
@@ -79,4 +79,4 @@ guess into authority. The worked example is `examples/clermont_detailing`.
 - **Tiering is name-based.** A shop whose name says nothing about what it does is tiered on what its
   name does say.
 - **Every constant in a study is a guess with a sane magnitude**, not a fitted value. They are in
-  the TOML so they can be argued with.
+  the study file so they can be argued with.
