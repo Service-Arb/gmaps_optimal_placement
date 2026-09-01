@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use service_arb_core::grid::Bbox;
+use service_arb_core::{grid::Bbox, payload::Poi};
 
 use crate::work::Work;
 
@@ -64,34 +64,6 @@ pub struct PoiConfig {
 	/// source's *primary* category, because the full list is noisy enough to veto real competitors:
 	/// Google tags several car washes `laundry`.
 	pub drop: Option<MatchSpec>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct Poi {
-	pub id: String,
-	pub name: String,
-	pub addr: String,
-	pub lat: f64,
-	pub lng: f64,
-	pub rating: Option<f64>,
-	pub n_rev: f64,
-	pub kind: String,
-	pub kind_label: String,
-	pub web: String,
-	pub tel: String,
-	pub tier: String,
-}
-
-impl Poi {
-	/// What a `poi_weight` expression may read. A field the source did not publish is absent rather
-	/// than zero, so an expression that needs it fails instead of quietly downweighting the shop.
-	pub fn fields(&self) -> IndexMap<String, f64> {
-		let mut m = IndexMap::from([("n_rev".to_owned(), self.n_rev)]);
-		if let Some(r) = self.rating {
-			m.insert("rating".to_owned(), r);
-		}
-		m
-	}
 }
 
 pub fn load(cfg: &PoiConfig, bbox: Bbox, work: &Work) -> Result<Vec<Poi>> {

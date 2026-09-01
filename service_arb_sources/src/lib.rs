@@ -7,6 +7,6 @@ pub mod searches;
 pub mod work;
 
 pub use grid::GridSource;
-pub use poi::{Poi, PoiConfig, PoiSource};
+pub use poi::{PoiConfig, PoiSource};
 pub use searches::{Keyword, Month};
 pub use work::Work;

@@ -1,8 +1,9 @@
 //! The study document. Not settings: there is no sane environment-variable spelling of `[[layer]]`,
 //! so it is plain `Deserialize` from a path, with a JSON schema for the editor.
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use service_arb_core::grid::Bbox;
+pub use service_arb_core::payload::{Candidate, Scale};
 use service_arb_sources::{GridSource, PoiConfig};
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -57,15 +58,6 @@ pub struct Model {
 	pub lambda_m: f64,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Scale {
-	/// Rank, not magnitude — these quantities are heavy-tailed and a linear ramp shows one hot pixel.
-	#[default]
-	Percentile,
-	Linear,
-}
-
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Column {
@@ -111,12 +103,4 @@ pub struct Group {
 	/// Checked before `match` — expansion drags in intent that is not demand.
 	#[serde(default)]
 	pub drop: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Candidate {
-	pub name: String,
-	/// [lat, lon]
-	pub at: [f64; 2],
 }

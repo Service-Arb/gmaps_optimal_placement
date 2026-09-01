@@ -11,53 +11,13 @@ use indexmap::IndexMap;
 use regex::Regex;
 use serde::Serialize;
 pub use service_arb_core as core;
-use service_arb_core::Expr;
+use service_arb_core::{Expr, LayerOut, PoiOut, TierOut};
+pub use service_arb_core::{Payload, payload};
 pub use service_arb_sources as sources;
 use service_arb_sources::{Keyword, Work, grid, poi, searches};
 
+use crate::config::Group;
 pub use crate::config::Study;
-use crate::config::{Candidate, Group, Scale};
-
-/// Everything the map needs, already evaluated. What stays in JS is only what the sliders move.
-#[derive(Debug, Serialize)]
-pub struct Payload {
-	pub name: String,
-	pub center: [f64; 2],
-	pub zoom: u8,
-	pub lambda_m: f64,
-	/// The demand expression itself — the map has no other honest caption for it.
-	pub demand_note: String,
-	/// 8 numbers per cell: (lon, lat) SW, SE, NE, NW.
-	pub ring: Vec<f64>,
-	pub place: Vec<String>,
-	pub imputed: Vec<u8>,
-	pub demand: Vec<f64>,
-	pub layers: Vec<LayerOut>,
-	pub tiers: Vec<TierOut>,
-	pub pois: Vec<PoiOut>,
-	pub candidates: Vec<Candidate>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct LayerOut {
-	pub name: String,
-	pub note: String,
-	pub scale: Scale,
-	pub values: Vec<f64>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct TierOut {
-	pub name: String,
-	pub weight: f64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct PoiOut {
-	#[serde(flatten)]
-	pub poi: poi::Poi,
-	pub w: f64,
-}
 
 /// One chart's worth of demand-side numbers. Members ride along with their own series, because a
 /// sum you cannot audit is a sum you cannot argue with.

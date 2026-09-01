@@ -1023,9 +1023,11 @@ dependencies = [
  "evalexpr",
  "eyre",
  "indexmap",
+ "insta",
  "proj4rs",
  "schemars",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
