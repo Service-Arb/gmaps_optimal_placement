@@ -1,3 +1,4 @@
+#![feature(default_field_values)]
 #![recursion_limit = "256"] // nested tachys view types blow the default 128 on the control panel
 #![doc = include_str!("../README.md")]
 

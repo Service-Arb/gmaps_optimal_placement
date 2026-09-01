@@ -2,7 +2,7 @@
 
 Where should a service business open. One Nix file describes an area, a statistical grid, what
 counts as a competitor and how demand follows from whatever columns that grid publishes; the tool
-emits one self-contained HTML map that answers it.
+serves a map that answers it.
 
 The question is the input. Retargeting a city, a country or a trade is an edit to the study
 document, never to the code.
@@ -19,15 +19,20 @@ document, never to the code.
    └───────────────┬───────────────────────────────┘
                    │  cells + named columns, POIs + tiers, keyword series
    ┌───────────────┴───────────────────────────────┐
-   │ service_arb_core           no I/O             │
+   │ service_arb_core     no I/O, wasm-safe        │
    │   Reproject · CellId · Grid · Expr            │
-   └───────────────┬───────────────────────────────┘
-                   │  every expression evaluated
-   ┌───────────────┴───────────────────────────────┐
-   │ service_arb                CLI, config, HTML  │
-   └───────────────┬───────────────────────────────┘
-                   ▼
-        one map.html · one <name>-searches.html
+   │   Payload — the whole thin waist              │
+   │   model — pressure, unmet, capture, top-N     │
+   └───────┬───────────────────────────┬───────────┘
+           │  every expression         │  every slider
+   ┌───────┴──────────────┐   ┌────────┴──────────────────────┐
+   │ service_arb          │   │ service_arb_web               │
+   │   CLI, study, HTML   │──▶│   ssr: axum + server fns      │
+   └──────────────────────┘   │   hydrate: the MapView island │
+                              │   map_core.js: google.maps    │
+                              └────────┬──────────────────────┘
+                                       ▼
+                        a served map · one <name>-searches.html
 ```
 
 The map answers where the people are. It does not answer how many are looking for the thing, which
@@ -36,11 +41,24 @@ nobody searches for.
 
 ## The line between baked and live
 
-Rust evaluates everything that a slider cannot move: the demand model and every configured layer,
-baked into the page as arrays. Competitor pressure, underserved demand, the capture score and the
-top-N sweep stay in JavaScript, because they are functions of λ and the tier weights, which are
-live controls. Moving either side across this line costs the map its interactivity or the study its
-reproducibility.
+Rust evaluates everything that a slider cannot move — the demand model and every configured layer —
+into a `Payload` the browser fetches. Competitor pressure, underserved demand, the capture score and
+the top-N sweep are recomputed in the page, because they are functions of λ and the tier weights,
+which are live controls. Moving either side across this line costs the map its interactivity or the
+study its reproducibility.
+
+Both sides are Rust. `service_arb_core` is wasm-safe and holds the model, so the same code that
+`cargo t` pins against a fixture is the code the browser runs.
+
+## The line between Rust and JavaScript
+
+`map_core.js` rides in as a wasm-bindgen snippet and is the only file that names `google.maps`: the
+map instance, the markers and their info windows, and the canvas fill loop — which stays there
+because it needs `fromLatLngToDivPixel` every frame. Rust hands it `ringX`/`ringY`, `colors`,
+`shown` and an opacity, and owns every one of those numbers. The pattern is `v_utils::lwc`'s.
+
+Nothing throws across that boundary. Under `panic=abort` a rejected promise reaching wasm kills the
+app, so every entry point in `map_core.js` returns a banner string instead.
 
 ## Invariants
 
@@ -50,9 +68,11 @@ reproducibility.
   zero. Imputed-versus-observed provenance survives to the map.
 - **Config defines the model; code defines the mechanism.** Anything a study would want to vary
   belongs in the study file. Anything two studies share belongs in Rust.
-- **The output is one file** that opens from disk with no server.
-- **The generated map embeds `GOOGLE_MAPS_KEY`; artifacts stay untracked.** Bulk archives and API
-  responses cache under `SERVICE_ARB_WORK` (default `./tmp/geo`) so a rerun costs nothing — the
+- **The study file is a seed, never a sink.** `serve` only reads it. Pins promoted or hidden on the
+  map are a diff beside it, under `XDG_DATA_HOME` — data, not cache, because a promoted candidate is
+  a decision and cache is what cleaners delete.
+- **`GOOGLE_MAPS_KEY` lives in the server's environment, never in an artifact.** Bulk archives and
+  API responses cache under `SERVICE_ARB_WORK` (default `./tmp/geo`) so a rerun costs nothing — the
   INSEE archive is ~87 MB and Places calls are billed.
 
 ## Sources are an enum

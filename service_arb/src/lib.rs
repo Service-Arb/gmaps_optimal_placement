@@ -98,6 +98,10 @@ impl Study {
 		for t in &self.poi.tiers {
 			ensure!(pois.iter().any(|p| p.poi.tier == t.name), "no competitor fell into tier {:?}", t.name);
 		}
+		for (i, c) in self.candidates.iter().enumerate() {
+			// the pin file hides by name, so a duplicate would hide two pins at once
+			ensure!(!self.candidates[..i].iter().any(|o| o.name == c.name), "two [[candidate]] are both named {:?}", c.name);
+		}
 
 		let mut ring = Vec::with_capacity(n * 8);
 		for c in &g.cells {

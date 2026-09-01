@@ -9,11 +9,6 @@ use eyre::{Result, WrapErr};
 use leptos::prelude::*;
 use service_arb_core::Payload;
 
-/// Where `wasm-bindgen` put the client. The nix wrapper sets it; a dev shell gets `cargo`'s own.
-fn site_root() -> PathBuf {
-	std::env::var_os("LEPTOS_SITE_ROOT").map_or_else(|| PathBuf::from("target/site"), PathBuf::from)
-}
-
 pub fn serve(payload: Payload, addr: SocketAddr, open: bool) -> Result<()> {
 	// leptos spawns the SSR stream through `any_spawner`, which has no executor until it is told
 	any_spawner::Executor::init_tokio().map_err(|e| eyre::eyre!("{e}"))?;
@@ -72,4 +67,8 @@ pub fn serve(payload: Payload, addr: SocketAddr, open: bool) -> Result<()> {
 		}
 		axum::serve(listener, app.into_make_service()).await.wrap_err("serving")
 	})
+}
+/// Where `wasm-bindgen` put the client. The nix wrapper sets it; a dev shell gets `cargo`'s own.
+fn site_root() -> PathBuf {
+	std::env::var_os("LEPTOS_SITE_ROOT").map_or_else(|| PathBuf::from("target/site"), PathBuf::from)
 }

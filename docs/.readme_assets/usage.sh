@@ -1,8 +1,9 @@
-# Set your Google Maps API key. The map embeds it.
+# Set your Google Maps API key. The server reads it; it never lands in a file.
 export GOOGLE_MAPS_KEY=...
 
-# Write the map. Bulk archives and API responses cache in $SERVICE_ARB_WORK (default ./tmp/geo).
-service_arb map examples/clermont_detailing/config.nix
+# Serve the map. Bulk archives and API responses cache in $SERVICE_ARB_WORK (default ./tmp/geo);
+# candidates you promote from the map land in $XDG_DATA_HOME/service_arb.
+service_arb serve examples/clermont_detailing/config.nix --open
 
 # Chart the monthly search volume of each query group. Set the credentials of the provider first:
 # GOOGLE_ADS_{DEVELOPER_TOKEN,CLIENT_ID,CLIENT_SECRET,REFRESH_TOKEN,CUSTOMER_ID}, or

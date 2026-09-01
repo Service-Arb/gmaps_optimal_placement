@@ -41,37 +41,6 @@ pub struct State {
 	/// The `⧉` glyph, flipped for a beat by a copy that landed or one that did not.
 	pub copied: RwSignal<Option<bool>>,
 }
-
-#[derive(Default)]
-pub struct Heavy {
-	pub model: Option<Rc<Model>>,
-	pub press: Vec<f64>,
-	pub unmet: Vec<f64>,
-	pub shown: Vec<u8>,
-}
-
-#[derive(Clone, PartialEq)]
-pub struct Loaded {
-	pub study: String,
-	pub layers: Vec<(String, String)>,
-	pub tier_counts: Vec<usize>,
-	pub imputed: usize,
-}
-
-#[derive(Clone, PartialEq)]
-pub struct Legend {
-	pub ticks: [f64; 5],
-	pub count: usize,
-	pub linear: bool,
-}
-
-#[derive(Clone, PartialEq)]
-pub struct Tip {
-	pub text: String,
-	pub x: f64,
-	pub y: f64,
-}
-
 impl State {
 	fn new() -> Self {
 		Self {
@@ -102,20 +71,35 @@ impl State {
 		self.core.get().into_iter().enumerate().map(|(i, p)| (letter(i), p)).collect()
 	}
 
+	pub fn pin(&self, id: &str) -> Option<Pin> {
+		self.core
+			.with_untracked(|v| v.iter().find(|p| p.id == id).cloned())
+			.or_else(|| self.temp.with_untracked(|v| v.iter().find(|p| p.id == id).cloned()))
+	}
+
 	pub fn fresh_id(&self) -> String {
 		let n = self.next_id.get_value();
 		self.next_id.set_value(n + 1);
 		format!("t{n}")
 	}
 
-	/// The card for a site, and the pin it belongs to.
+	/// Open a pin's card.
 	pub fn open(&self, id: &str) {
-		let Some(pin) = self.pin(id) else { return };
+		self.copied.set(None);
+		self.selected.set(Some(id.to_owned()));
+		self.refresh_card();
+	}
+
+	/// The selected pin's report, against the controls as they stand. Reads nothing reactively, so
+	/// the effect that keeps the card live cannot re-enter itself through `selected`.
+	pub fn refresh_card(&self) {
+		let Some(pin) = self.selected.get_untracked().and_then(|id| self.pin(&id)) else { return };
 		let label = self
-			.lettered()
-			.into_iter()
-			.find(|(_, p)| p.id == pin.id)
-			.map(|(l, p)| format!("{l} · {}", p.name))
+			.core
+			.get_untracked()
+			.iter()
+			.position(|p| p.id == pin.id)
+			.map(|i| format!("{} · {}", letter(i), pin.name))
 			.or_else(|| pin.label.clone());
 		self.heavy.with_value(|h| {
 			let Some(m) = &h.model else { return };
@@ -128,14 +112,6 @@ impl State {
 				&self.tiers.get_untracked(),
 			)));
 		});
-		self.selected.set(Some(pin.id));
-		self.copied.set(None);
-	}
-
-	pub fn pin(&self, id: &str) -> Option<Pin> {
-		self.core
-			.with_untracked(|v| v.iter().find(|p| p.id == id).cloned())
-			.or_else(|| self.temp.with_untracked(|v| v.iter().find(|p| p.id == id).cloned()))
 	}
 
 	fn drop_temp(&self) {
@@ -196,13 +172,34 @@ impl State {
 	}
 }
 
-fn letter(i: usize) -> String {
-	char::from_u32('A' as u32 + i as u32).map_or_else(|| (i + 1).to_string(), String::from)
+#[derive(Default)]
+pub struct Heavy {
+	pub model: Option<Rc<Model>>,
+	pub press: Vec<f64>,
+	pub unmet: Vec<f64>,
+	pub shown: Vec<u8>,
 }
 
-/// The `★` is a hint in the dropdown, not part of the layer's name.
-fn plain(name: &str) -> String {
-	name.replace(" ★", "").trim().to_owned()
+#[derive(Clone, PartialEq)]
+pub struct Loaded {
+	pub study: String,
+	pub layers: Vec<(String, String)>,
+	pub tier_counts: Vec<usize>,
+	pub imputed: usize,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct Legend {
+	pub ticks: [f64; 5],
+	pub count: usize,
+	pub linear: bool,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct Tip {
+	pub text: String,
+	pub x: f64,
+	pub y: f64,
 }
 
 #[island]
@@ -213,8 +210,7 @@ pub fn MapView() -> impl IntoView {
 	view! {
 		<div id="map"></div>
 		{move || {
-			s
-				.tip
+			s.tip
 				.get()
 				.map(|t| {
 					view! {
@@ -235,8 +231,7 @@ pub fn MapView() -> impl IntoView {
 					s.loaded
 						.get()
 						.map(|l| {
-							l
-								.layers
+							l.layers
 								.into_iter()
 								.enumerate()
 								.map(|(i, (name, _))| view! { <option value=i.to_string()>{name}</option> })
@@ -381,6 +376,14 @@ pub fn MapView() -> impl IntoView {
 		{move || s.report.get().map(|r| view! { <crate::pins::Card state=s report=r /> })}
 	}
 }
+fn letter(i: usize) -> String {
+	char::from_u32('A' as u32 + i as u32).map_or_else(|| (i + 1).to_string(), String::from)
+}
+
+/// The `★` is a hint in the dropdown, not part of the layer's name.
+fn plain(name: &str) -> String {
+	name.replace(" ★", "").trim().to_owned()
+}
 
 fn gradient() -> String {
 	let stops: Vec<String> = (0..=10)
@@ -510,9 +513,8 @@ mod imp {
 		// the open card is a live view of λ, not a snapshot of when it was clicked
 		Effect::new(move |_| {
 			s.recomputed.track();
-			if let Some(id) = s.selected.get() {
-				s.open(&id);
-			}
+			s.selected.track();
+			s.refresh_card();
 		});
 
 		Effect::new(move |_| {
