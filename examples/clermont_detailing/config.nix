@@ -64,6 +64,7 @@
     lambda_m = 2000;
   };
 
+  #Q: potentially harden this, so as to move out of the config, - I don't think this'll be changing
   layer = [
     {
       name = "Population";

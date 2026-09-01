@@ -1,0 +1,2 @@
+- not wise to compete with people with 200+ reviews
+- want at least 700 monthly searches in the area I'm positioning for

@@ -1,0 +1,2 @@
+- have [google reviews section](https://elfsight.com/fr/google-reviews-widget/?utm_source=websites&utm_medium=clients&utm_content=google-reviews&utm_term=%25website_domain%25&utm_campaign=free-widget)
+- list whatsapp and snapchat above phone, since I'll convert more here
