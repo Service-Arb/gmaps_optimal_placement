@@ -1,16 +1,10 @@
-//! The map is one file that opens from disk. The template is embedded, so the binary is too.
-use eyre::{Result, WrapErr, ensure};
+//! The search-volume chart is still one file that opens from disk: it has no controls worth
+//! persisting and nothing to write back. The map stopped being one — `service_arb_web` says why.
+use eyre::{Result, ensure};
 
-use crate::{Payload, SearchPayload};
+use crate::SearchPayload;
 
-const TEMPLATE: &str = include_str!("map_template.html");
 const SEARCHES: &str = include_str!("searches_template.html");
-
-pub fn render(payload: &Payload) -> Result<String> {
-	let key = std::env::var("GOOGLE_MAPS_KEY").wrap_err("GOOGLE_MAPS_KEY is not set")?;
-	let data = serde_json::to_string(payload)?;
-	fill(TEMPLATE, &[("/*__DATA__*/null", &data), ("__TITLE__", &payload.name), ("__KEY__", &key)])
-}
 
 pub fn render_searches(payload: &SearchPayload) -> Result<String> {
 	let data = serde_json::to_string(payload)?;

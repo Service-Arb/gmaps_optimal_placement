@@ -58,7 +58,7 @@ pub struct LayerSpec {
 	pub linear: bool,
 	pub source: LayerRef,
 }
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Row {
 	pub label: String,
 	/// Second line under the label: whatever the row measured against.
@@ -66,7 +66,7 @@ pub struct Row {
 	/// Empty makes the row a section heading.
 	pub value: String,
 }
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Report {
 	pub title: String,
 	pub rows: Vec<Row>,

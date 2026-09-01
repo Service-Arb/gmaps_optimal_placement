@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{Parser, Subcommand};
 use eyre::Result;
@@ -13,12 +13,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-	/// Where the people are: demand under the competitors, as one HTML map
-	Map {
+	/// Where the people are: demand under the competitors, as a map served from here
+	Serve {
 		config: PathBuf,
-		/// Defaults to `<work dir>/out/<study name>.html`
-		#[arg(short, long)]
-		out: Option<PathBuf>,
+		#[arg(short, long, default_value_t = 8731)]
+		port: u16,
+		/// Point the desktop browser at it once it is up
+		#[arg(long)]
+		open: bool,
 	},
 	/// How many people ask for it: monthly volume per query group, as one HTML chart
 	Searches {
@@ -34,30 +36,29 @@ enum Cmd {
 fn main() -> Result<()> {
 	color_eyre::install()?;
 	let work = Work::from_env();
-	let (out, html, default) = match Cli::parse().cmd {
+	match Cli::parse().cmd {
 		Cmd::Schema => {
 			println!("{}", serde_json::to_string_pretty(&schemars::schema_for!(service_arb::Study))?);
-			return Ok(());
+			Ok(())
 		}
-		Cmd::Map { config, out } => {
+		Cmd::Serve { config, port, open } => {
 			let payload = service_arb::load(&config)?.build(&work)?;
 			report(service_arb::stats(&payload));
-			(out, service_arb::render::render(&payload)?, format!("{}.html", payload.name))
+			service_arb_web::serve::serve(payload, SocketAddr::from(([127, 0, 0, 1], port)), open)
 		}
 		Cmd::Searches { config, out } => {
 			let payload = service_arb::load(&config)?.searches(&work)?;
 			report(service_arb::search_stats(&payload));
-			(out, service_arb::render::render_searches(&payload)?, format!("{}-searches.html", payload.name))
+			let html = service_arb::render::render_searches(&payload)?;
+			let out = out.unwrap_or_else(|| work.path().join("out").join(format!("{}-searches.html", payload.name)));
+			if let Some(dir) = out.parent() {
+				std::fs::create_dir_all(dir)?;
+			}
+			std::fs::write(&out, &html)?;
+			eprintln!("wrote {} ({:.1} MB)", out.display(), html.len() as f64 / 1e6);
+			Ok(())
 		}
-	};
-
-	let out = out.unwrap_or_else(|| work.path().join("out").join(default));
-	if let Some(dir) = out.parent() {
-		std::fs::create_dir_all(dir)?;
 	}
-	std::fs::write(&out, &html)?;
-	eprintln!("wrote {} ({:.1} MB)", out.display(), html.len() as f64 / 1e6);
-	Ok(())
 }
 
 fn report(stats: indexmap::IndexMap<String, String>) {

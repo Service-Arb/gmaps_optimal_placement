@@ -1,5 +1,5 @@
 [workspace]
-members = ["service_arb", "service_arb_core", "service_arb_sources"]
+members = ["service_arb", "service_arb_core", "service_arb_sources", "service_arb_web"]
 resolver = "3"
 
 [workspace.package]
@@ -20,6 +20,7 @@ unused_features = "allow"
 [workspace.dependencies]
 service_arb_core = { path = "service_arb_core", version = "0.1.0" }
 service_arb_sources = { path = "service_arb_sources", version = "0.1.0" }
+service_arb_web = { path = "service_arb_web", version = "0.1.0" }
 
 base64 = "0.22"
 clap = "4"
@@ -37,3 +38,26 @@ serde_json = "1"
 sha2 = "0.11"
 ureq = "3"
 zip = "8"
+
+# The leptos family and the wasm toolchain are pinned exactly: a `wasm-bindgen` crate/CLI schema skew
+# is a hard error at bindgen time, and `cargo-leptos` must match the leptos crate.
+any_spawner = "=0.3.0"
+axum = "=0.8.9"
+console_error_panic_hook = "=0.1.7"
+gloo-net = { version = "=0.6.0", features = ["http"] }
+js-sys = "=0.3.103"
+leptos = { version = "=0.8.20", features = ["islands"] }
+leptos_axum = "=0.8.10"
+tokio = { version = "=1.53.1", features = ["rt-multi-thread", "net"] }
+tower-http = { version = "=0.7.0", features = ["fs", "compression-gzip"] }
+wasm-bindgen = "=0.2.126" #NB: version must match that of wasm-bindgen-cli (pinned in flake.nix)
+wasm-bindgen-futures = "=0.4.76"
+web-sys = { version = "=0.3.103", features = ["Clipboard", "CssStyleDeclaration", "Document", "DomRect", "Element", "HtmlElement", "Navigator", "Window"] }
+xdg = "=3.0.0"
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = 'z'
+lto = true
+codegen-units = 1
+panic = "abort"

@@ -18,6 +18,7 @@ serde.workspace = true
 serde_json.workspace = true
 service_arb_core.workspace = true
 service_arb_sources.workspace = true
+service_arb_web = { workspace = true, features = ["ssr"] }
 
 [dev-dependencies]
 insta.workspace = true

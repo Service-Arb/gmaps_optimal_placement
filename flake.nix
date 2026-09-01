@@ -12,13 +12,34 @@
         pkgs = import v_flakes.default_nixpkgs { inherit system; config.allowUnfree = true; };
         rust = v_flakes.rs.default_nightly system;
         pre-commit-check = pre-commit-hooks.lib.${system}.run (v_flakes.files.preCommit { inherit pkgs; stripClaudeSignature = true; });
-        manifest = (pkgs.lib.importTOML ./service_arb/Cargo.toml).package;
-        pname = manifest.name;
+        pname = (pkgs.lib.importTOML ./service_arb/Cargo.toml).package.name;
+        # inherited from the workspace, so it is not in the member's own `[package]`
+        version = (pkgs.lib.importTOML ./Cargo.toml).workspace.package.version;
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
-        # The smoke test serves the built map over http: a `file://` referrer is not something a
-        # Maps key can be restricted to.
         port = 8731;
 
+        # Pinned to match the workspace's `wasm-bindgen` — nixpkgs ships a different minor, and a
+        # CLI/crate schema skew is a hard error at `wasm-bindgen` time. Shadows
+        # `pkgs.wasm-bindgen-cli` (a `let` binding wins over `with pkgs;`) wherever it is referenced.
+        wasm-bindgen-cli =
+          let
+            src = pkgs.fetchCrate {
+              pname = "wasm-bindgen-cli";
+              version = "0.2.126";
+              hash = "sha256-H6Is3fiZVxZCfOMWK5dWMSrtn50VGv0sfdnsT+cTtyk=";
+            };
+          in
+          pkgs.buildWasmBindgenCli {
+            inherit src;
+            cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+              inherit src;
+              inherit (src) pname version;
+              hash = "sha256-VucqkXbCi4qtQzY/HrXiDnbSURsagPsdNVMn1Tw3UiY=";
+            };
+          };
+
+        # `wasm32-unknown-unknown` is already in the canonical toolchain, so the client needs no
+        # target of its own here.
         rs = v_flakes.rs { inherit pkgs rust; };
         github = v_flakes.github {
           inherit pkgs pname rs;
@@ -40,35 +61,41 @@
         };
         combined = v_flakes.utils.combine { inherit rust; modules = [ rs github readme ]; };
 
+        # The server binary and the wasm client are separate compilations (`ssr` vs `hydrate`), so
+        # this is the one place that knows how to produce both. Sourced by every app below.
+        client = ''
+          cargo build -p service_arb_web --target wasm32-unknown-unknown --features hydrate --no-default-features
+          mkdir -p target/site/pkg
+          wasm-bindgen --target web --out-dir target/site/pkg --out-name service_arb_web \
+            target/wasm32-unknown-unknown/debug/service_arb_web.wasm
+        '';
+
         # The smoke test asserts Clermont's numbers, so it takes no study: `smoke.js` and
         # `config.nix` are one fixture.
         study = pkgs.writeShellApplication {
           name = "study";
-          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold nodejs chromium psmisc nix ];
+          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold nodejs chromium psmisc nix wasm-bindgen-cli ];
           text = ''
             cd "$(git rev-parse --show-toplevel)"
-            out="''${SERVICE_ARB_WORK:-tmp/geo}/out"
-            cargo run -p service_arb -- map examples/clermont_detailing/config.nix --out "$out/map.html"
+            ${client}
             fuser -k ${toString port}/tcp 2>/dev/null || true
-            (cd "$out" && python3 -m http.server ${toString port} >/dev/null 2>&1 &)
-            sleep 1
-            node examples/clermont_detailing/smoke.js "http://localhost:${toString port}/map.html"
-            fuser -k ${toString port}/tcp 2>/dev/null || true
+            cargo run -p service_arb -- serve examples/clermont_detailing/config.nix --port ${toString port} &
+            server=$!
+            trap 'kill $server 2>/dev/null || true' EXIT
+            node examples/clermont_detailing/smoke.js "http://localhost:${toString port}/"
           '';
         };
-        # `open <study.nix>` — build the map, serve it, open in the desktop browser.
+        # `open <study.nix>` — build the client, evaluate the study, serve it, open a browser at it.
         open = pkgs.writeShellApplication {
           name = "open-map";
-          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold python3 psmisc xdg-utils nix ];
+          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold psmisc xdg-utils nix wasm-bindgen-cli ];
           text = ''
             [ $# -eq 1 ] || { echo "usage: nix run .#open <study.nix>" >&2; exit 1; }
             config="$(realpath "$1")"
             cd "$(git rev-parse --show-toplevel)"
-            out="''${SERVICE_ARB_WORK:-tmp/geo}/out"
-            cargo run -p service_arb -- map "$config" --out "$out/map.html"
+            ${client}
             fuser -k ${toString port}/tcp 2>/dev/null || true
-            xdg-open "http://localhost:${toString port}/map.html" &
-            cd "$out" && python3 -m http.server ${toString port}
+            exec cargo run -p service_arb -- serve "$config" --port ${toString port} --open
           '';
         };
         # `searches <study.nix>` — build the volume chart, serve it, open it.
@@ -91,11 +118,12 @@
           name = "help";
           text = ''
             cat <<'EOF'
-            nix run .#open     <study.nix>  open the built map in your browser (serves on :${toString port}, Ctrl-C to stop)
+            nix run .#open     <study.nix>  serve the map on :${toString port} and open it (Ctrl-C to stop)
             nix run .#searches <study.nix>  open the monthly search-volume chart for the study's query groups
-            nix run .#study                 build the Clermont map and assert its numbers in headless Chromium
+            nix run .#study                 serve the Clermont map and assert it in headless Chromium
             nix run .#help                  this
-            output lands under $SERVICE_ARB_WORK (default tmp/geo)
+            cached archives and API responses live under $SERVICE_ARB_WORK (default tmp/geo);
+            promoted candidates live under $XDG_DATA_HOME/service_arb
             a study is a Nix file evaluating to the attrset `service_arb schema` describes: area, grid,
             poi (queries + weighted tiers), column, model, layer, candidate, and an optional searches block.
             EOF
@@ -114,11 +142,41 @@
         packages.default =
           (pkgs.makeRustPlatform { rustc = rust; cargo = rust; inherit stdenv; }).buildRustPackage {
             inherit pname;
-            version = manifest.version;
+            inherit version;
             buildInputs = with pkgs; [ openssl.dev ];
-            nativeBuildInputs = with pkgs; [ pkg-config ];
+            nativeBuildInputs = with pkgs; [ pkg-config wasm-bindgen-cli binaryen ];
             cargoLock.lockFile = ./Cargo.lock;
             src = pkgs.lib.cleanSource ./.;
+
+            # cargo-leptos is bypassed: the two halves are plain cargo invocations, and this build has
+            # to place the client where `LEPTOS_SITE_ROOT` will point at runtime.
+            buildPhase = ''
+              runHook preBuild
+              cargo build --release -p service_arb --bin ${pname}
+              cargo build --release -p service_arb_web --lib --target wasm32-unknown-unknown --features hydrate --no-default-features
+              mkdir -p target/site/pkg
+              wasm-bindgen --target web --out-dir target/site/pkg --out-name service_arb_web \
+                target/wasm32-unknown-unknown/release/service_arb_web.wasm
+              wasm-opt -Oz target/site/pkg/service_arb_web_bg.wasm -o target/site/pkg/service_arb_web_bg.wasm
+              runHook postBuild
+            '';
+
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out/bin $out/share/${pname}
+              cp target/release/${pname} $out/bin/${pname}-unwrapped
+              cp -r target/site $out/share/${pname}/site
+              cat > $out/bin/${pname} <<EOF
+              #!${pkgs.runtimeShell}
+              export LEPTOS_SITE_ROOT="\''${LEPTOS_SITE_ROOT:-$out/share/${pname}/site}"
+              exec "$out/bin/${pname}-unwrapped" "\$@"
+              EOF
+              chmod +x $out/bin/${pname}
+              runHook postInstall
+            '';
+
+            doCheck = false;
+            auditable = false; # cargo-auditable doesn't support edition 2024
           };
 
         devShells.default =
@@ -131,9 +189,18 @@
               + ''
                 cp -f ${(v_flakes.files.treefmt) { inherit pkgs; }} ./.treefmt.toml
                 cp -f ${(v_flakes.files.gitattributes) { inherit pkgs; lfs = false; }} ./.gitattributes
+
+                # cargo-leptos must match the leptos crate, so it cannot come from nixpkgs. Only
+                # `cargo leptos watch` wants it — the builds above are plain cargo.
+                LOCK_FILE="/tmp/cargo-leptos-install-$(echo "$PWD" | md5sum | cut -d' ' -f1).lock"
+                if mkdir "$LOCK_FILE" 2>/dev/null; then
+                  trap "rmdir '$LOCK_FILE' 2>/dev/null" EXIT
+                  cargo install cargo-leptos
+                fi
               '';
 
             packages = [
+              binaryen
               chromium
               mold
               nodejs
@@ -143,6 +210,7 @@
               (v_flakes.qlty system)
               rust
               study
+              wasm-bindgen-cli
             ] ++ pre-commit-check.enabledPackages ++ combined.enabledPackages;
 
             env.RUST_BACKTRACE = 1;
