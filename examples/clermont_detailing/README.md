@@ -3,7 +3,7 @@
 The study is [`config.nix`](config.nix). There is no code here.
 
 ```fish
-nix run .#study examples/clermont_detailing/config.nix
+nix run .#study
 ```
 
 builds `tmp/geo/out/map.html` — Google Maps basemap, competitors on it, INSEE 200 m

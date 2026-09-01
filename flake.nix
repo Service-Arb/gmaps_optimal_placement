@@ -40,15 +40,15 @@
         };
         combined = v_flakes.utils.combine { inherit rust; modules = [ rs github readme ]; };
 
-        # `study <path/to/config.nix>` — build the map, then drive it in headless Chromium.
+        # The smoke test asserts Clermont's numbers, so it takes no study: `smoke.js` and
+        # `config.nix` are one fixture.
         study = pkgs.writeShellApplication {
           name = "study";
           runtimeInputs = with pkgs; [ rust git pkg-config openssl mold nodejs chromium psmisc nix ];
           text = ''
             cd "$(git rev-parse --show-toplevel)"
-            config="''${1:-examples/clermont_detailing/config.nix}"
             out="''${SERVICE_ARB_WORK:-tmp/geo}/out"
-            cargo run -p service_arb -- map "$config" --out "$out/map.html"
+            cargo run -p service_arb -- map examples/clermont_detailing/config.nix --out "$out/map.html"
             fuser -k ${toString port}/tcp 2>/dev/null || true
             (cd "$out" && python3 -m http.server ${toString port} >/dev/null 2>&1 &)
             sleep 1
@@ -56,13 +56,14 @@
             fuser -k ${toString port}/tcp 2>/dev/null || true
           '';
         };
-        # `open <path/to/config.nix>` — build the map, serve it, open in the desktop browser.
+        # `open <study.nix>` — build the map, serve it, open in the desktop browser.
         open = pkgs.writeShellApplication {
           name = "open-map";
           runtimeInputs = with pkgs; [ rust git pkg-config openssl mold python3 psmisc xdg-utils nix ];
           text = ''
+            [ $# -eq 1 ] || { echo "usage: nix run .#open <study.nix>" >&2; exit 1; }
+            config="$(realpath "$1")"
             cd "$(git rev-parse --show-toplevel)"
-            config="''${1:-examples/clermont_detailing/config.nix}"
             out="''${SERVICE_ARB_WORK:-tmp/geo}/out"
             cargo run -p service_arb -- map "$config" --out "$out/map.html"
             fuser -k ${toString port}/tcp 2>/dev/null || true
@@ -70,13 +71,14 @@
             cd "$out" && python3 -m http.server ${toString port}
           '';
         };
-        # `searches <path/to/config.nix>` — build the volume chart, serve it, open it.
+        # `searches <study.nix>` — build the volume chart, serve it, open it.
         searches = pkgs.writeShellApplication {
           name = "open-searches";
           runtimeInputs = with pkgs; [ rust git pkg-config openssl mold python3 psmisc xdg-utils nix ];
           text = ''
+            [ $# -eq 1 ] || { echo "usage: nix run .#searches <study.nix>" >&2; exit 1; }
+            config="$(realpath "$1")"
             cd "$(git rev-parse --show-toplevel)"
-            config="''${1:-examples/clermont_detailing/config.nix}"
             out="''${SERVICE_ARB_WORK:-tmp/geo}/out"
             cargo run -p service_arb -- searches "$config" --out "$out/searches.html"
             fuser -k ${toString port}/tcp 2>/dev/null || true
@@ -89,11 +91,11 @@
           name = "help";
           text = ''
             cat <<'EOF'
-            nix run .#open     [study.nix]  open the built map in your browser (serves on :${toString port}, Ctrl-C to stop)
-            nix run .#searches [study.nix]  open the monthly search-volume chart for the study's query groups
-            nix run .#study    [study.nix]  build the map and assert its numbers in headless Chromium
+            nix run .#open     <study.nix>  open the built map in your browser (serves on :${toString port}, Ctrl-C to stop)
+            nix run .#searches <study.nix>  open the monthly search-volume chart for the study's query groups
+            nix run .#study                 build the Clermont map and assert its numbers in headless Chromium
             nix run .#help                  this
-            the study defaults to examples/clermont_detailing/config.nix; output under $SERVICE_ARB_WORK (default tmp/geo)
+            output lands under $SERVICE_ARB_WORK (default tmp/geo)
             a study is a Nix file evaluating to the attrset `service_arb schema` describes: area, grid,
             poi (queries + weighted tiers), column, model, layer, candidate, and an optional searches block.
             EOF
