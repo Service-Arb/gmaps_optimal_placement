@@ -1,0 +1,1 @@
+- Eric's latest revelations https://www.skool.com/20kmodropservicingblueprint/call-recording-for-todays-live
