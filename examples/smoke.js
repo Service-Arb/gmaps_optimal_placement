@@ -13,7 +13,7 @@ const path = require("node:path");
 
 const URL_ = process.argv[2] || "http://localhost:8731/";
 const PORT = 9333;
-const PINS = path.join(process.env.XDG_DATA_HOME || "", "service_arb", "pins-clermont_detailing.json");
+const PINS = path.join(process.env.XDG_DATA_HOME || "", "service_arb", "pins-car_detailing_-_Clermont-Ferrand.json");
 const PROMOTED = "Smoke Site";
 
 const chrome = spawn("chromium", [

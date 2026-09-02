@@ -71,7 +71,7 @@
         '';
 
         # The smoke test asserts Clermont's numbers, so it takes no study: `smoke.js` and
-        # `config.nix` are one fixture.
+        # `car_detailing_-_Clermont-Ferrand.nix` are one fixture.
         study = pkgs.writeShellApplication {
           name = "study";
           runtimeInputs = with pkgs; [ rust git pkg-config openssl mold nodejs chromium psmisc nix curl wasm-bindgen-cli ];
@@ -82,7 +82,7 @@
             # the smoke promotes and drops pins, so it gets a data dir of its own
             XDG_DATA_HOME="$(mktemp -d)"
             export XDG_DATA_HOME
-            cargo run -p service_arb -- serve examples/clermont_detailing/config.nix --port ${toString port} &
+            cargo run -p service_arb -- serve examples/car_detailing_-_Clermont-Ferrand.nix --port ${toString port} &
             server=$!
             trap 'kill $server 2>/dev/null || true; rm -rf "$XDG_DATA_HOME"' EXIT
             # the router only exists once the study is evaluated, which reads an 87 MB archive
@@ -90,7 +90,7 @@
               curl -sf -o /dev/null "http://localhost:${toString port}/pkg/service_arb_web.js" && break
               sleep 1
             done
-            node examples/clermont_detailing/smoke.js "http://localhost:${toString port}/"
+            node examples/smoke.js "http://localhost:${toString port}/"
           '';
         };
         # `open <study.nix>` — build the client, evaluate the study, serve it, open a browser at it.

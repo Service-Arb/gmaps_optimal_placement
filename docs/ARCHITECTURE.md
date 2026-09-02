@@ -105,7 +105,7 @@ with. A keyword the provider has no data for is excluded from the sum, never zer
 
 These are not caveats about the implementation. They are the distance between the model and the
 decision, and they are the difference between a map that informs one and a map that launders a
-guess into authority. The worked example is `examples/clermont_detailing`.
+guess into authority. The worked examples are in `examples/`.
 
 - **Motorisation is estimated, not measured.** No 200 m source publishes households-with-a-car;
   INSEE has it only at IRIS level. The Clermont study infers it from the house/flat split

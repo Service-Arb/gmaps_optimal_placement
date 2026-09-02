@@ -12,7 +12,7 @@ use service_arb_sources::Work;
 #[test]
 fn clermont_centre() {
 	let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("crate lives in the workspace");
-	let mut study: Study = service_arb::load(&root.join("examples/clermont_detailing/config.nix")).unwrap();
+	let mut study: Study = service_arb::load(&root.join("examples/car_detailing_-_Clermont-Ferrand.nix")).unwrap();
 	study.area = Area {
 		bbox: Bbox {
 			lat: [45.770, 45.790],
@@ -37,8 +37,8 @@ fn clermont_centre() {
 	demand total    36501.2
 	Population      49327.0
 	Households      29006.8
-	Estimated cars  27082.0
 	Standard of living (€/yr) 5571857.5
 	Households in houses 3466.1
+	Estimated cars  27082.0
 	");
 }

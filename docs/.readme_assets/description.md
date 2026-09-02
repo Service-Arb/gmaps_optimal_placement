@@ -12,4 +12,4 @@ The question is the input: a different city, country or trade is an edit to the 
 to the code.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the invariants, and
-[examples/clermont_detailing](examples/clermont_detailing) for a worked study.
+[examples/](examples) for worked studies.

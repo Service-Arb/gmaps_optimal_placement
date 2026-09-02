@@ -1,6 +1,6 @@
 //! The numbers the map used to compute in the browser, pinned against the Clermont study.
 //!
-//! `clermont_payload.json` is one `service_arb map examples/clermont_detailing/config.nix` — the
+//! `clermont_payload.json` is one `service_arb map examples/car_detailing_-_Clermont-Ferrand.nix` — the
 //! billed half of the pipeline, frozen, so this runs with no network and no key.
 use service_arb_core::{
 	Model, Payload,

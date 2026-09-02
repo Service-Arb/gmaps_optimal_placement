@@ -1,17 +1,8 @@
+let clermont = import ./_Clermont-Ferrand.nix; in
 {
-  name = "clermont_detailing";
+  name = "car_detailing_-_Clermont-Ferrand";
 
-  area = {
-    # Clermont-Ferrand agglomeration, generous: Riom (N) to Issoire-ward (S), Volvic (W) to Lezoux-ward (E).
-    bbox = { lat = [ 45.55 45.95 ]; lon = [ 2.90 3.40 ]; };
-    center = [ 45.7797 3.0863 ];
-    zoom = 12;
-  };
-
-  grid = {
-    source = "insee_filosofi_200m";
-    vintage = 2021;
-  };
+  inherit (clermont) area grid;
 
   poi = {
     source = "google_places";
@@ -50,11 +41,9 @@
     };
   };
 
-  # INSEE publishes the standard of living summed over individuals, and no motorisation at all at
-  # 200 m — that variable exists only at IRIS level. See docs/ARCHITECTURE.md on what this model
-  # therefore does not know.
-  column = [
-    { name = "nv"; expr = "ind_snv / max(ind, 1)"; }
+  # INSEE publishes no motorisation at all at 200 m — that variable exists only at IRIS level.
+  # See docs/ARCHITECTURE.md on what this model therefore does not know.
+  column = clermont.column ++ [
     { name = "cars"; expr = "men_mais * 1.55 + men_coll * 0.85"; }
   ];
 
@@ -64,43 +53,17 @@
     lambda_m = 2000;
   };
 
-  #Q: potentially harden this, so as to move out of the config, - I don't think this'll be changing
-  layer = [
-    {
-      name = "Population";
-      expr = "ind";
-      note = "Raw head count per 200 m cell.";
-    }
-    {
-      name = "Households";
-      expr = "men";
-      note = "Fiscal households per cell.";
-    }
+  layer = clermont.layer ++ [
     {
       name = "Estimated cars";
       expr = "cars";
       note = "Houses × 1.55 + flats × 0.85. Inferred, not measured.";
     }
-    {
-      name = "Standard of living (€/yr)";
-      expr = "nv";
-      scale = "linear";
-      note = "Mean disposable income per consumption unit. A per-person rate, not a density — thinly populated affluent suburbs light up.";
-    }
-    {
-      name = "Households in houses";
-      expr = "men_mais";
-      note = "Best available proxy for driveway/garage and two-car households.";
-    }
   ];
 
   # `match` / `drop` are the same vocabulary as `poi.tier` / `poi.drop`: case-insensitive regex,
   # `drop` checked first. The expansion is fuzzy and drags in intent that is not demand.
-  searches = {
-    provider = "google_ads";
-    place = "Clermont-Ferrand,Auvergne-Rhone-Alpes,France";
-    language = "fr";
-
+  searches = clermont.searches // {
     group = [
       {
         name = "detailing";
