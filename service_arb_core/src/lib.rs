@@ -6,9 +6,11 @@ pub mod grid;
 pub mod model;
 pub mod payload;
 pub mod proj;
+pub mod rank;
 
 pub use expr::Expr;
 pub use grid::{Cell, CellId, Grid};
 pub use model::Model;
-pub use payload::{Candidate, LayerOut, Payload, Poi, PoiOut, Scale, TierOut};
+pub use payload::{Candidate, LayerOut, Payload, Poi, PoiOut, Scale, TermOut, TierOut};
 pub use proj::Reproject;
+pub use rank::{Feats, Rank};

@@ -3,10 +3,11 @@
 
 pub mod grid;
 pub mod poi;
+pub mod probe;
 pub mod searches;
 pub mod work;
 
 pub use grid::GridSource;
-pub use poi::{PoiConfig, PoiSource};
+pub use poi::{PoiConfig, PoiSource, Ranking, Region};
 pub use searches::{Keyword, Month};
 pub use work::Work;

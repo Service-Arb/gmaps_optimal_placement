@@ -8,6 +8,9 @@ use service_arb_core::{grid::Bbox, payload::Poi};
 
 use crate::work::Work;
 
+pub const SEARCH_TEXT: &str = "https://places.googleapis.com/v1/places:searchText";
+/// Enterprise SKU: `rating`, `websiteUri` and `nationalPhoneNumber` each pull the mask up a tier.
+/// The map displays all three.
 const FIELDS: &str = "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,\
 	places.types,places.primaryType,places.primaryTypeDisplayName,places.businessStatus,places.websiteUri,places.nationalPhoneNumber,nextPageToken";
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -66,7 +69,58 @@ pub struct PoiConfig {
 	pub drop: Option<MatchSpec>,
 }
 
-pub fn load(cfg: &PoiConfig, bbox: Bbox, work: &Work) -> Result<Vec<Poi>> {
+/// What Places returned for one query, in the order it ranked them. Both the tiled inventory sweep
+/// and the probe produce these; the fit reads nothing else.
+#[derive(Clone, Debug)]
+pub struct Ranking {
+	pub from: Region,
+	pub term: String,
+	pub ids: Vec<String>,
+}
+
+/// Where the search was asked from, which is what says who could have been returned.
+#[derive(Clone, Copy, Debug)]
+pub enum Region {
+	/// `locationRestriction`: a hard filter with nobody standing in it. Distance is not defined,
+	/// and a coefficient fitted on it would be measuring the tiling.
+	Tile(Bbox),
+	/// `locationBias`: a searcher at [lat, lon], and a radius the ranking may reach past.
+	Node([f64; 2], f64),
+}
+
+/// The competitors, and every ordering the search that found them handed back.
+pub struct Inventory {
+	pub pois: Vec<Poi>,
+	pub obs: Vec<Ranking>,
+}
+
+/// One text search, paged, in rank order. The body and the field mask are the caller's, because
+/// they are what decides the SKU.
+pub fn search_text(work: &Work, key: &str, body: &serde_json::Value, mask: &str, pages: usize) -> Result<Vec<(String, serde_json::Value)>> {
+	let mut out = Vec::new();
+	let mut token: Option<String> = None;
+	for _ in 0..pages {
+		let mut body = body.clone();
+		if let Some(t) = &token {
+			body["pageToken"] = serde_json::Value::String(t.clone());
+		}
+		let res = work.cached_post(SEARCH_TEXT, &body, &[("X-Goog-Api-Key", key), ("X-Goog-FieldMask", mask)])?;
+		if let Some(e) = res.get("error") {
+			bail!("Places text search {}: {e}", body["textQuery"]);
+		}
+		for p in res["places"].as_array().into_iter().flatten() {
+			let id = p["id"].as_str().ok_or_else(|| eyre::eyre!("Places returned a result without an id: {p}"))?;
+			out.push((id.to_owned(), p.clone()));
+		}
+		match res["nextPageToken"].as_str() {
+			Some(t) => token = Some(t.to_owned()),
+			None => break,
+		}
+	}
+	Ok(out)
+}
+
+pub fn load(cfg: &PoiConfig, bbox: Bbox, work: &Work) -> Result<Inventory> {
 	let PoiSource::GooglePlaces = cfg.source;
 	let key = std::env::var("GOOGLE_MAPS_KEY").wrap_err("GOOGLE_MAPS_KEY is not set")?;
 	ensure!(cfg.tiles > 0, "poi.tiles must be at least 1");
@@ -75,39 +129,32 @@ pub fn load(cfg: &PoiConfig, bbox: Bbox, work: &Work) -> Result<Vec<Poi>> {
 	ensure!(!tiers.is_empty(), "at least one [[poi.tier]] is needed to say what a competitor is");
 
 	let mut raw: IndexMap<String, serde_json::Value> = IndexMap::new();
+	let mut obs = Vec::new();
 	let (dlat, dlon) = ((bbox.lat[1] - bbox.lat[0]) / cfg.tiles as f64, (bbox.lon[1] - bbox.lon[0]) / cfg.tiles as f64);
-	let mut calls = 0;
 	for i in 0..cfg.tiles {
 		for j in 0..cfg.tiles {
+			// the cache key is the body verbatim, so these expressions may not be re-associated
+			let (lat0, lon0) = (bbox.lat[0] + i as f64 * dlat, bbox.lon[0] + j as f64 * dlon);
+			let (lat1, lon1) = (bbox.lat[0] + (i + 1) as f64 * dlat, bbox.lon[0] + (j + 1) as f64 * dlon);
 			let rect = serde_json::json!({
-				"low":  {"latitude": bbox.lat[0] + i as f64 * dlat,       "longitude": bbox.lon[0] + j as f64 * dlon},
-				"high": {"latitude": bbox.lat[0] + (i + 1) as f64 * dlat, "longitude": bbox.lon[0] + (j + 1) as f64 * dlon},
+				"low":  {"latitude": lat0, "longitude": lon0},
+				"high": {"latitude": lat1, "longitude": lon1},
 			});
+			let tile = Bbox {
+				lat: [lat0, lat1],
+				lon: [lon0, lon1],
+			};
 			for q in &cfg.queries {
-				let mut token: Option<String> = None;
+				let body = serde_json::json!({"textQuery": q, "pageSize": 20, "locationRestriction": {"rectangle": rect}});
 				// 3 pages x 20 is the API maximum for one text search
-				for _ in 0..3 {
-					let mut body = serde_json::json!({"textQuery": q, "pageSize": 20, "locationRestriction": {"rectangle": rect}});
-					if let Some(t) = &token {
-						body["pageToken"] = serde_json::Value::String(t.clone());
-					}
-					let res = work.cached_post(
-						"https://places.googleapis.com/v1/places:searchText",
-						&body,
-						&[("X-Goog-Api-Key", &key), ("X-Goog-FieldMask", FIELDS)],
-					)?;
-					calls += 1;
-					if let Some(e) = res.get("error") {
-						bail!("Places text search {q:?}: {e}");
-					}
-					for p in res["places"].as_array().into_iter().flatten() {
-						let id = p["id"].as_str().ok_or_else(|| eyre::eyre!("Places returned a result without an id: {p}"))?;
-						raw.entry(id.to_owned()).or_insert_with(|| p.clone());
-					}
-					match res["nextPageToken"].as_str() {
-						Some(t) => token = Some(t.to_owned()),
-						None => break,
-					}
+				let page = search_text(work, &key, &body, FIELDS, 3)?;
+				obs.push(Ranking {
+					from: Region::Tile(tile),
+					term: q.clone(),
+					ids: page.iter().map(|(id, _)| id.clone()).collect(),
+				});
+				for (id, p) in page {
+					raw.entry(id).or_insert(p);
 				}
 			}
 		}
@@ -149,8 +196,8 @@ pub fn load(cfg: &PoiConfig, bbox: Bbox, work: &Work) -> Result<Vec<Poi>> {
 		});
 	}
 	out.sort_by(|a, b| b.n_rev.total_cmp(&a.n_rev));
-	eprintln!("places: {} raw over {calls} calls, {} kept", raw.len(), out.len());
-	Ok(out)
+	eprintln!("places: {} raw over {} billed calls, {} kept", raw.len(), work.billed(), out.len());
+	Ok(Inventory { pois: out, obs })
 }
 struct Matcher {
 	pattern: Option<Regex>,

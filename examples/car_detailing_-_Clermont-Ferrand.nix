@@ -49,8 +49,20 @@ let clermont = import ./_Clermont-Ferrand.nix; in
 
   model = {
     demand = "cars * (max(nv, 4000) / 22000) ^ 1.6";
-    poi_weight = "clamp(sqrt(max(n_rev, 1) / 50), 0.4, 2.5)";
     lambda_m = 2000;
+  };
+
+  # Not `poi.queries`: those name the trade the way the trade names itself, which is exactly the
+  # variation the name coefficient cannot be fitted on. Nobody outside the trade says "esthétique
+  # automobile"; they say they want the car cleaned.
+  rank = {
+    nodes = 32;
+    radius_m = 4000;
+    term = [
+      { text = "lavage auto"; weight = 1.0; }
+      { text = "nettoyage intérieur voiture"; weight = 0.6; }
+      { text = "polissage carrosserie"; weight = 0.4; }
+    ];
   };
 
   layer = clermont.layer ++ [

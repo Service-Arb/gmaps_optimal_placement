@@ -58,8 +58,8 @@ fn state_matches_the_study() {
 	pressure nonzero 8576
 	demand nonzero 10446
 	demand total 346002.4
-	unmet total 147075.7
-	pressure total 14033.335823
+	unmet total 117654.5
+	pressure total 27340.837444
 	");
 }
 
@@ -82,9 +82,9 @@ fn pressure_moves_with_the_controls() {
 	assert_eq!(p_base, p_again, "recompute is deterministic");
 
 	insta::assert_snapshot!(format!("base {p_base:.6}\nno wash {p_no_wash:.6}\nlambda 4000 {p_wide:.6}"), @"
-	base 14033.335823
-	no wash 7408.933201
-	lambda 4000 45012.247947
+	base 27340.837444
+	no wash 12574.450215
+	lambda 4000 87845.339268
 	");
 }
 
@@ -101,16 +101,16 @@ fn top_ten_sites() {
 	}
 	insta::assert_snapshot!(s, @"
 	4617 candidate cells
-	 1. Chamalières                    9.0k  45.77289, 3.06944
-	 2. Châtel-Guyon                   8.9k  45.91457, 3.07977
-	 3. Ceyrat                         8.6k  45.75625, 3.06382
-	 4. Saint-Bonnet-près-Riom         8.4k  45.92441, 3.11991
-	 5. Ceyrat                         8.2k  45.74140, 3.05798
-	 6. Châtel-Guyon                   8.2k  45.92432, 3.06300
-	 7. Riom                           8.1k  45.90678, 3.09888
-	 8. Saint-Bonnet-près-Riom         8.1k  45.92650, 3.09636
-	 9. Royat                          8.1k  45.76617, 3.04965
-	10. Clermont-Ferrand               7.9k  45.76296, 3.08360
+	 1. Châtel-Guyon                   7.7k  45.91457, 3.07977
+	 2. Saint-Bonnet-près-Riom         7.4k  45.92767, 3.11433
+	 3. Châtel-Guyon                   7.2k  45.92432, 3.06300
+	 4. Yssac-la-Tourette              7.0k  45.92975, 3.09077
+	 5. Riom                           6.7k  45.90678, 3.09888
+	 6. Davayat                        6.6k  45.94347, 3.10714
+	 7. Châtel-Guyon                   6.6k  45.90931, 3.05457
+	 8. Mozac                          6.1k  45.89973, 3.07391
+	 9. Châtel-Guyon                   6.1k  45.93917, 3.06886
+	10. Chambaron sur Morge            6.0k  45.93976, 3.13349
 	");
 }
 
@@ -119,9 +119,9 @@ fn site_report_downtown() {
 	let m = model();
 	let tiers = m.tier_states();
 	let press = m.pressure(m.payload.lambda_m, &tiers);
-	insta::assert_snapshot!(render(&m.site_report(45.7797, 3.0863, None, m.payload.lambda_m, &press, &tiers)), @"
+	insta::assert_snapshot!(render(&m.site_report([45.7797, 3.0863], None, Some("Nettoyage Auto Clermont"), m.payload.lambda_m, &press, &tiers)), @r#"
 	Clermont-Ferrand
-	  Capture score                7.4k
+	  Capture score                3.9k
 	  Demand ≤1 / ≤3 km            16k / 81k
 	  Nearest detail               0.19 km
 	    Clermont Nettoyage Auto et P
@@ -132,7 +132,10 @@ fn site_report_downtown() {
 	  Nearest competitor, any      0.19 km
 	  All competitors ≤2 km        13
 	  Coordinates                  45.77970, 3.08630
-	");
+	  Open as "Nettoyage Auto Clermont", no reviews 0.18 of a median rival
+	    reviews are associated with rank, not a lever on it
+	  Outranks, of the ≤2 km field 1 of 13
+	"#);
 }
 
 #[test]
@@ -143,11 +146,13 @@ fn candidates_compare() {
 	insta::assert_snapshot!(render(&m.compare(&m.payload.candidates, m.payload.lambda_m, &press)), @"
 	Candidates · λ=2.0 km
 	  Capture score                
-	  VifNet                       8.8k · 100%
+	  VifNet                       4.8k · 100%
 	  Demand ≤1 / ≤3 km            
 	  VifNet                       15k / 70k
 	  Nearest competitor · ≤2 km   
 	  VifNet                       1.01 km · 9
+	  Opening weight, under this name, no reviews 
+	  VifNet                       0.11 of a median rival
 	");
 }
 
@@ -173,14 +178,14 @@ fn every_layer_colours() {
 		));
 	}
 	insta::assert_snapshot!(s, @"
-	Underserved demand  ★        10446 shown,  3914 without imputed, ticks 0.02 · 2.60 · 8.29 · 20 · 185
-	Competitor pressure           8576 shown,  3692 without imputed, ticks 0.01 · 0.21 · 0.62 · 2.09 · 10
+	Underserved demand  ★        10446 shown,  3914 without imputed, ticks 0.01 · 2.14 · 6.63 · 15 · 162
+	Competitor pressure           8576 shown,  3692 without imputed, ticks 0.00 · 0.32 · 1.12 · 3.85 · 23
 	Demand                       10446 shown,  3914 without imputed, ticks 0.23 · 3.65 · 13 · 45 · 786
 	Population                   10446 shown,  3914 without imputed, ticks 1.00 · 4.00 · 15 · 50 · 1.3k
 	Households                   10446 shown,  3914 without imputed, ticks 0.30 · 1.90 · 6.20 · 21 · 828
-	Estimated cars               10446 shown,  3914 without imputed, ticks 0.33 · 2.79 · 9.46 · 31 · 704
 	Standard of living (€/yr)    10446 shown,  3914 without imputed, ticks 11k · 19k · 27k · 35k · 43k
 	Households in houses         10398 shown,  3869 without imputed, ticks 0.10 · 1.70 · 5.70 · 17 · 175
+	Estimated cars               10446 shown,  3914 without imputed, ticks 0.33 · 2.79 · 9.46 · 31 · 704
 	");
 }
 
@@ -197,9 +202,9 @@ fn tooltip_over_a_cell() {
 	Clermont-Ferrand
 	Population 424
 	Households 256
-	Estimated cars 219
 	Standard of living (€/yr) 29k
 	Households in houses 2.00
-	demand 339 · pressure 8.29 · unmet 36
+	Estimated cars 219
+	demand 339 · pressure 16.61 · unmet 19
 	");
 }

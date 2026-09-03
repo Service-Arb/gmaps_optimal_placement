@@ -55,23 +55,6 @@ impl Expr {
 		}
 		Ok(out)
 	}
-
-	/// One row of named scalars — the per-POI form of the same language.
-	pub fn eval_row(&self, values: &IndexMap<String, f64>) -> Result<f64> {
-		let mut ctx = context()?;
-		for name in &self.vars {
-			let v = values
-				.get(name)
-				.ok_or_else(|| eyre!("expression {:?} reads unknown field {name:?}; available: {}", self.src, list(values)))?;
-			ctx.set_value(name.to_owned(), Value::Float(*v)).map_err(|e| eyre!("binding {name}: {e}"))?;
-		}
-		let v = self.tree.eval_with_context(&ctx).map_err(|e| eyre!("expression {:?}: {e}", self.src))?;
-		let v = v.as_number().map_err(|e| eyre!("expression {:?} is not a number: {e}", self.src))?;
-		if !v.is_finite() {
-			bail!("expression {:?} is {v}", self.src);
-		}
-		Ok(v)
-	}
 }
 
 fn list<V>(m: &IndexMap<String, V>) -> String {
@@ -127,16 +110,7 @@ mod tests {
 
 	#[test]
 	fn builtins_we_did_not_register_are_not_reachable() {
-		assert!(Expr::parse("math::ln(2)").unwrap().eval_row(&IndexMap::new()).is_err());
-		assert!(Expr::parse("len(\"ab\")").unwrap().eval_row(&IndexMap::new()).is_err());
-	}
-
-	#[test]
-	fn clamp_and_sqrt_over_one_row() {
-		let e = Expr::parse("clamp(sqrt(max(n_rev, 1) / 50), 0.4, 2.5)").unwrap();
-		let at = |n: f64| e.eval_row(&IndexMap::from([("n_rev".to_owned(), n)])).unwrap();
-		assert!((at(0.) - 0.4).abs() < 1e-12);
-		assert!((at(862.) - 2.5).abs() < 1e-12);
-		assert!((at(200.) - 2.).abs() < 1e-12);
+		assert!(Expr::parse("math::ln(2)").unwrap().eval_column(&IndexMap::new(), 1).is_err());
+		assert!(Expr::parse("len(\"ab\")").unwrap().eval_column(&IndexMap::new(), 1).is_err());
 	}
 }

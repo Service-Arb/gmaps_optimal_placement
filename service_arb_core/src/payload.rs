@@ -2,7 +2,6 @@
 //!
 //! The shape lives here rather than beside the CLI because the map reads it back, and the map is
 //! wasm — it may not link a single line of I/O.
-use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -21,8 +20,17 @@ pub struct Payload {
 	pub demand: Vec<f64>,
 	pub layers: Vec<LayerOut>,
 	pub tiers: Vec<TierOut>,
+	/// The study's queries and what each is worth. `w` is already scored against them; the what-if
+	/// needs them because the business it scores does not exist yet.
+	pub terms: Vec<TermOut>,
 	pub pois: Vec<PoiOut>,
 	pub candidates: Vec<Candidate>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TermOut {
+	pub text: String,
+	pub weight: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -43,6 +51,7 @@ pub struct TierOut {
 pub struct PoiOut {
 	#[serde(flatten)]
 	pub poi: Poi,
+	/// How much this one counts, from `rank`, normalised so the median of its tier is 1.
 	pub w: f64,
 }
 
@@ -61,18 +70,6 @@ pub struct Poi {
 	pub web: String,
 	pub tel: String,
 	pub tier: String,
-}
-
-impl Poi {
-	/// What a `poi_weight` expression may read. A field the source did not publish is absent rather
-	/// than zero, so an expression that needs it fails instead of quietly downweighting the shop.
-	pub fn fields(&self) -> IndexMap<String, f64> {
-		let mut m = IndexMap::from([("n_rev".to_owned(), self.n_rev)]);
-		if let Some(r) = self.rating {
-			m.insert("rating".to_owned(), r);
-		}
-		m
-	}
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, Serialize)]

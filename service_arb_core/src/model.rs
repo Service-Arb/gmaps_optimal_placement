@@ -6,7 +6,10 @@
 use eyre::{Result, ensure};
 use serde::Serialize;
 
-use crate::payload::{Candidate, Payload, PoiOut, Scale};
+use crate::{
+	payload::{Candidate, Payload, PoiOut, Scale},
+	rank::{self, Biz, Feats, Rank},
+};
 
 const R: f64 = 6378137.;
 /// Beyond 3λ the exponential contributes under 5 % of one competitor — not worth the distance.
@@ -96,6 +99,13 @@ pub struct Model {
 	m_per_lng: f64,
 	m_per_lat: f64,
 	comps: Vec<Comp>,
+	/// The same fitted model `build` weighted the competitors with, so the what-if is scored on the
+	/// scale the map is already painted in.
+	rank: Rank,
+	terms: Vec<(String, f64)>,
+	/// The divisor `build` normalised the first tier by. A newcomer is measured against direct
+	/// competition, which is what the study's first tier is.
+	scale: f64,
 }
 impl Model {
 	pub fn try_new(payload: Payload) -> Result<Self> {
@@ -148,6 +158,33 @@ impl Model {
 			})
 			.collect::<Result<Vec<_>>>()?;
 
+		let rated: Vec<f64> = payload.pois.iter().filter_map(|p| p.poi.rating).collect();
+		ensure!(!rated.is_empty(), "no competitor carries a rating, so there is nothing to shrink towards");
+		let rank = Rank::try_new(Feats::try_new(rated.iter().sum::<f64>() / rated.len() as f64, &payload.place)?, rank::COEF)?;
+		let terms: Vec<(String, f64)> = payload.terms.iter().map(|t| (t.text.clone(), t.weight)).collect();
+
+		// rescoring the first tier here recovers the divisor `build` used, and proves the coefficients
+		// that painted this payload are the ones linked in: otherwise the map would quietly show
+		// weights from a model nobody is running any more
+		let first = &payload.tiers.first().ok_or_else(|| eyre::eyre!("payload declares no tier"))?.name;
+		let mut scored: Vec<(f64, f64)> = payload
+			.pois
+			.iter()
+			.filter(|p| &p.poi.tier == first)
+			.map(|p| (rank.strength(&Biz::from(&p.poi), &terms), p.w))
+			.collect();
+		ensure!(!scored.is_empty(), "no competitor is in tier {first:?}, which is the scale everything else is read against");
+		scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+		let scale = scored[scored.len() / 2].0;
+		ensure!(scale > 0., "tier {first:?} scores a median strength of {scale}");
+		for (raw, w) in &scored {
+			ensure!(
+				(raw / scale - w).abs() < 1e-3,
+				"tier {first:?} carries w={w} where rank::COEF now scores {:.4} — the payload was built by a different model",
+				raw / scale
+			);
+		}
+
 		Ok(Self {
 			payload,
 			ring_x,
@@ -161,6 +198,9 @@ impl Model {
 			m_per_lng,
 			m_per_lat,
 			comps,
+			rank,
+			terms,
+			scale,
 		})
 	}
 
@@ -369,7 +409,10 @@ impl Model {
 		(picked, cand.len())
 	}
 
-	pub fn site_report(&self, lat: f64, lng: f64, label: Option<&str>, lambda: f64, press: &[f64], tiers: &[TierState]) -> Report {
+	/// `label` titles the card; `name` is the trading name to score the what-if under, which is a
+	/// different string because the title carries the pin's letter and the model reads the words.
+	pub fn site_report(&self, at: [f64; 2], label: Option<&str>, name: Option<&str>, lambda: f64, press: &[f64], tiers: &[TierState]) -> Report {
+		let [lat, lng] = at;
 		let (mx, my) = self.to_local(lat, lng);
 		let (d1, d3) = self.demand_within(mx, my);
 		let any = self.nearest(mx, my, None);
@@ -394,6 +437,9 @@ impl Model {
 		rows.push(row("Nearest competitor, any", km(any.map(|(_, d)| d))));
 		rows.push(row("All competitors ≤2 km", self.within(mx, my, 2000., None).to_string()));
 		rows.push(row("Coordinates", format!("{lat:.5}, {lng:.5}")));
+		if let Some(name) = name {
+			rows.extend(self.what_if(name, mx, my, lat, lng));
+		}
 
 		Report {
 			title: match label {
@@ -405,6 +451,41 @@ impl Model {
 		}
 	}
 
+	/// Open here, under this name, with nothing on the board yet: what would Google's own ordering
+	/// make of it. Scored on the same per-tier scale `w` is, so `1.00` is the median rival.
+	pub fn opening_weight(&self, name: &str, lat: f64, lng: f64) -> f64 {
+		self.rank.strength(
+			&Biz {
+				name,
+				n_rev: 0.,
+				rating: None,
+				lat,
+				lng,
+			},
+			&self.terms,
+		) / self.scale
+	}
+
+	fn what_if(&self, name: &str, mx: f64, my: f64, lat: f64, lng: f64) -> Vec<Row> {
+		let w = self.opening_weight(name, lat, lng);
+		let near: Vec<f64> = self
+			.payload
+			.pois
+			.iter()
+			.zip(&self.comps)
+			.filter(|(_, c)| (c.mx - mx).hypot(c.my - my) < 2000.)
+			.map(|(p, _)| p.w)
+			.collect();
+		vec![
+			Row {
+				label: format!("Open as {name:?}, no reviews"),
+				sub: Some("reviews are associated with rank, not a lever on it".to_owned()),
+				value: format!("{w:.2} of a median rival"),
+			},
+			row("Outranks, of the ≤2 km field", format!("{} of {}", near.iter().filter(|&&x| x < w).count(), near.len())),
+		]
+	}
+
 	pub fn compare(&self, candidates: &[Candidate], lambda: f64, press: &[f64]) -> Report {
 		struct Line {
 			name: String,
@@ -413,6 +494,7 @@ impl Model {
 			d3: f64,
 			near: Option<f64>,
 			n2: usize,
+			w: f64,
 		}
 		let lines: Vec<Line> = candidates
 			.iter()
@@ -426,6 +508,7 @@ impl Model {
 					d3,
 					near: self.nearest(mx, my, None).map(|(_, d)| d),
 					n2: self.within(mx, my, 2000., None),
+					w: self.opening_weight(&c.name, c.at[0], c.at[1]),
 				}
 			})
 			.collect();
@@ -445,11 +528,13 @@ impl Model {
 				},
 			)
 		}));
+		rows.push(heading("Opening weight, under this name, no reviews"));
+		rows.extend(lines.iter().map(|l| row(&l.name, format!("{:.2} of a median rival", l.w))));
 
 		Report {
 			title: format!("Candidates · λ={:.1} km", lambda / 1000.),
 			rows,
-			note: "Percentages are against the best candidate here, not against the best site in the area — use \"Rank top 10 sites\" for that.".to_owned(),
+			note: "Percentages are against the best candidate here, not against the best site in the area — use \"Rank top 10 sites\" for that. Opening weight is what Google's ordering makes of the name; reviews are associated with rank, not a lever on it.".to_owned(),
 		}
 	}
 }
@@ -532,7 +617,7 @@ pub fn fmt(n: f64) -> String {
 struct Comp {
 	mx: f64,
 	my: f64,
-	/// `poi_weight` at this shop, before the tier multiplier.
+	/// Fitted strength, before the tier multiplier.
 	w: f64,
 	tier: usize,
 }

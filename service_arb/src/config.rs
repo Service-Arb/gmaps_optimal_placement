@@ -19,6 +19,7 @@ pub struct Study {
 	#[serde(default, rename = "column")]
 	pub columns: Vec<Column>,
 	pub model: Model,
+	pub rank: RankSpec,
 	#[serde(rename = "layer")]
 	pub layers: Vec<Layer>,
 	/// Optional: the map answers where the people are, this answers how many of them ask for the
@@ -52,10 +53,33 @@ pub struct GridSpec {
 pub struct Model {
 	/// Per cell, over the grid's columns.
 	pub demand: String,
-	/// Per competitor, over the fields the POI source publishes.
-	pub poi_weight: String,
 	/// Catchment decay, metres. The map's opening slider position.
 	pub lambda_m: f64,
+}
+
+/// What the study asks Google, and how much each answer counts. The reviews→prominence curve is
+/// not here: it is a property of how Google ranks, shared by every trade, and lives in
+/// `service_arb_core::rank`.
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RankSpec {
+	/// Power of two — a k-d split to depth log2(n), one equal share of demand per stratum.
+	pub nodes: usize,
+	/// The `locationBias` circle, metres.
+	pub radius_m: f64,
+	/// Deliberately not `poi.queries`: those are tuned to *find* competitors, which biases them
+	/// toward words already in the shop names. The name coefficient is identified by businesses that
+	/// were close and did not appear, so this set must contain terms the names do not.
+	#[serde(rename = "term")]
+	pub terms: Vec<Term>,
+}
+
+/// One query, and what a searcher typing it is worth — this is where searches × ticket price enters.
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Term {
+	pub text: String,
+	pub weight: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]

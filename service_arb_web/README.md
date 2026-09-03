@@ -2,7 +2,7 @@
 
 The map. A Leptos island over a study's payload, and the axum server that feeds it.
 
-```
+```text
 service_arb serve study.nix
         │
         ├─ GET /            shell — the Maps bootstrap, the CSS, the island marker

@@ -3,6 +3,8 @@ CLI and the study document.
 ```sh
 service_arb serve    <study.nix> [--port 8731] [--open]
 service_arb searches <study.nix> [-o searches.html]
+service_arb probe    <study.nix> [--dry-run]        # ask Google, from equal-demand nodes
+service_arb fit      <study.nix>...                 # refit rank::COEF over every ordering cached
 service_arb schema                 # JSON schema for the study document
 ```
 
@@ -15,6 +17,12 @@ zero.
 An optional `searches` block names groups of queries. [`fold`] is the half of that command that is
 ours: the provider expands seeds semantically, a regex keeps or drops each member, and the survivors
 sum into one line of [`SearchPayload`] — with their own series alongside, so the sum can be audited.
+
+The `rank` block says which queries the study is about and what each is worth. `probe` asks them from
+the demand strata, `fit` estimates `service_arb_core::rank::COEF` over every ordering in the work dir
+— pass every study at once, because how Google ranks is one mechanism and each study on its own is
+about fifty orderings. [`fit::Fit::check`] is what refuses a fit whose implied catchment nothing
+observed.
 
 [`Payload`] is what `serve` hands the browser. It carries evaluated per-cell values only: competitor
 pressure, underserved demand, capture scores and the top-N sweep are `service_arb_core::model`,

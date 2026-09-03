@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod config;
+pub mod fit;
 pub mod render;
 
 use std::path::Path;
@@ -11,10 +12,13 @@ use indexmap::IndexMap;
 use regex::Regex;
 use serde::Serialize;
 pub use service_arb_core as core;
-use service_arb_core::{Expr, LayerOut, PoiOut, TierOut};
+use service_arb_core::{
+	Expr, LayerOut, PoiOut, TierOut,
+	rank::{self, Biz, Feats, Rank},
+};
 pub use service_arb_core::{Payload, payload};
 pub use service_arb_sources as sources;
-use service_arb_sources::{Keyword, Work, grid, poi, searches};
+use service_arb_sources::{Keyword, Ranking, Work, grid, poi, probe, searches};
 
 use crate::config::Group;
 pub use crate::config::Study;
@@ -84,17 +88,67 @@ impl Study {
 		Ok(Cells { grid, demand, layers })
 	}
 
+	/// The ordering evidence this study contributes: the inventory sweep always, the probe wherever
+	/// it has already been run. Reads the work dir, never the network.
+	pub fn observations(&self, work: &Work) -> Result<(Vec<core::rank::Obs>, (f64, f64))> {
+		let cells = self.cells(work)?;
+		let inv = poi::load(&self.poi, self.area.bbox, work)?;
+		let mut obs = inv.obs;
+		let probed = probe::cached(work, &probe::plan(&at(&self.nodes(&cells)?), &self.terms(), self.rank.radius_m))?;
+		eprintln!("{}: {} orderings from the inventory sweep, {} from the probe", self.name, obs.len(), probed.len());
+		obs.extend(probed);
+		let places: Vec<String> = cells.grid.cells.iter().map(|c| c.place.clone()).collect();
+		fit::observations(&feats(&places, &inv.pois)?, &inv.pois, &obs)
+	}
+
+	pub fn probe(&self, work: &Work, dry: bool) -> Result<Vec<Ranking>> {
+		let nodes = self.nodes(&self.cells(work)?)?;
+		let plan = probe::plan(&at(&nodes), &self.terms(), self.rank.radius_m);
+		if dry {
+			for n in &nodes {
+				eprintln!("  {:.5}, {:.5}   {:.1}% of demand", n.at[0], n.at[1], 100. * n.share);
+			}
+			eprintln!("{} searches, one call each: {} Text Search Essentials", plan.len(), plan.len());
+			return Ok(Vec::new());
+		}
+		let out = probe::run(work, plan)?;
+		eprintln!("probe: {} orderings over {} billed calls", out.len(), work.billed());
+		Ok(out)
+	}
+
+	fn terms(&self) -> Vec<String> {
+		self.rank.terms.iter().map(|t| t.text.clone()).collect()
+	}
+
+	fn nodes(&self, cells: &Cells) -> Result<Vec<rank::Node>> {
+		let at: Vec<[f64; 2]> = cells
+			.grid
+			.cells
+			.iter()
+			.map(|c| {
+				let (lon, lat) = c.ring.iter().fold((0., 0.), |(x, y), p| (x + p[0] / 4., y + p[1] / 4.));
+				[lat, lon]
+			})
+			.collect();
+		rank::nodes(&at, &cells.demand, self.rank.nodes)
+	}
+
 	pub fn build(&self, work: &Work) -> Result<Payload> {
 		let Cells { grid: g, demand, layers } = self.cells(work)?;
 		let n = g.len();
-		let weight = Expr::parse(&self.model.poi_weight)?;
-		let pois = poi::load(&self.poi, self.area.bbox, work)?
+		let place: Vec<String> = g.cells.iter().map(|c| c.place.clone()).collect();
+		let inv = poi::load(&self.poi, self.area.bbox, work)?;
+		let model = Rank::try_new(feats(&place, &inv.pois)?, rank::COEF)?;
+		let terms: Vec<(String, f64)> = self.rank.terms.iter().map(|t| (t.text.clone(), t.weight)).collect();
+		let mut pois: Vec<PoiOut> = inv
+			.pois
 			.into_iter()
 			.map(|p| {
-				let w = weight.eval_row(&p.fields()).wrap_err_with(|| format!("[model] poi_weight at {:?}", p.name))?;
-				Ok(PoiOut { poi: p, w })
+				let w = model.strength(&Biz::from(&p), &terms);
+				PoiOut { poi: p, w }
 			})
-			.collect::<Result<Vec<_>>>()?;
+			.collect();
+		normalise(&mut pois, &self.poi.tiers)?;
 		for t in &self.poi.tiers {
 			ensure!(pois.iter().any(|p| p.poi.tier == t.name), "no competitor fell into tier {:?}", t.name);
 		}
@@ -118,7 +172,7 @@ impl Study {
 			lambda_m: self.model.lambda_m,
 			demand_note: self.model.demand.clone(),
 			ring,
-			place: g.cells.iter().map(|c| c.place.clone()).collect(),
+			place,
 			imputed: g.cells.iter().map(|c| u8::from(c.imputed)).collect(),
 			demand: round(demand, 3),
 			layers,
@@ -131,6 +185,7 @@ impl Study {
 					weight: t.weight,
 				})
 				.collect(),
+			terms: terms.into_iter().map(|(text, weight)| payload::TermOut { text, weight }).collect(),
 			pois,
 			candidates: self.candidates.clone(),
 		})
@@ -216,7 +271,6 @@ pub fn fold(group: &Group, ideas: Vec<Keyword>) -> Result<(Vec<String>, GroupOut
 		},
 	))
 }
-
 pub fn load(path: &Path) -> Result<Study> {
 	let out = std::process::Command::new("nix")
 		.args(["eval", "--json", "--file"])
@@ -230,15 +284,20 @@ pub fn load(path: &Path) -> Result<Study> {
 	}
 	Ok(study)
 }
-
 /// Summary statistics, so a model change that moves numbers is visible rather than silent.
 pub fn stats(p: &Payload) -> IndexMap<String, String> {
 	let sum = |v: &[f64]| v.iter().sum::<f64>();
+	let mut w: Vec<f64> = p.pois.iter().map(|q| q.w).collect();
+	w.sort_by(f64::total_cmp);
 	let mut m = IndexMap::from([
 		("cells".to_owned(), p.place.len().to_string()),
 		("imputed_cells".to_owned(), p.imputed.iter().filter(|&&i| i == 1).count().to_string()),
 		("demand_total".to_owned(), format!("{:.1}", sum(&p.demand))),
 		("competitors".to_owned(), p.pois.len().to_string()),
+		(
+			"competitor_w".to_owned(),
+			format!("total {:.2}, median {:.2}, max {:.2}", sum(&w), w[w.len() / 2], w[w.len() - 1]),
+		),
 	]);
 	for t in &p.tiers {
 		m.insert(format!("tier_{}", t.name), p.pois.iter().filter(|q| q.poi.tier == t.name).count().to_string());
@@ -248,7 +307,6 @@ pub fn stats(p: &Payload) -> IndexMap<String, String> {
 	}
 	m
 }
-
 pub fn search_stats(p: &SearchPayload) -> IndexMap<String, String> {
 	let mut m = IndexMap::from([
 		("place".to_owned(), p.place.clone()),
@@ -262,6 +320,36 @@ pub fn search_stats(p: &SearchPayload) -> IndexMap<String, String> {
 		);
 	}
 	m
+}
+fn at(nodes: &[rank::Node]) -> Vec<[f64; 2]> {
+	nodes.iter().map(|n| n.at).collect()
+}
+
+fn feats(places: &[String], pois: &[payload::Poi]) -> Result<Feats> {
+	let rated: Vec<f64> = pois.iter().filter_map(|p| p.rating).collect();
+	ensure!(!rated.is_empty(), "no competitor carries a rating, so there is nothing to shrink towards");
+	Feats::try_new(rated.iter().sum::<f64>() / rated.len() as f64, places)
+}
+
+/// `w = 1` is "a competitor as strong as the thing I am about to open" — `Model::capture_at` gives a
+/// candidate's own pull an implicit weight of 1.0. Per tier, because `Model::pressure` already
+/// multiplies by the tier weight: a fitted strength that has learned a wash ranks below a detailer
+/// would otherwise be discounted twice, and the tier slider would stop being the only cross-tier
+/// statement in the study.
+fn normalise(pois: &mut [PoiOut], tiers: &[service_arb_sources::poi::Tier]) -> Result<()> {
+	for t in tiers {
+		let mut w: Vec<f64> = pois.iter().filter(|p| p.poi.tier == t.name).map(|p| p.w).collect();
+		if w.is_empty() {
+			continue;
+		}
+		w.sort_by(f64::total_cmp);
+		let med = w[w.len() / 2];
+		ensure!(med > 0., "tier {:?} has a median strength of {med}, so it cannot be normalised", t.name);
+		for p in pois.iter_mut().filter(|p| p.poi.tier == t.name) {
+			p.w = round1(p.w / med, 4);
+		}
+	}
+	Ok(())
 }
 
 fn round(v: Vec<f64>, places: i32) -> Vec<f64> {

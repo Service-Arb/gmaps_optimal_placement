@@ -1,5 +1,6 @@
 //! The untracked work dir: bulk archives and API responses, so a rerun costs nothing.
 use std::{
+	cell::Cell,
 	fs,
 	io::Read,
 	path::{Path, PathBuf},
@@ -8,25 +9,36 @@ use std::{
 use eyre::{Result, WrapErr, bail};
 use sha2::{Digest, Sha256};
 
-pub struct Work(PathBuf);
+pub struct Work {
+	dir: PathBuf,
+	billed: Cell<usize>,
+}
 
 impl Work {
 	/// `SERVICE_ARB_WORK`, else `./tmp/geo` — gitignored, and where the prototype already put its
 	/// downloads.
 	pub fn from_env() -> Self {
-		Self(std::env::var_os("SERVICE_ARB_WORK").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("tmp/geo")))
+		Self::at(std::env::var_os("SERVICE_ARB_WORK").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("tmp/geo")))
 	}
 
 	pub fn at(dir: impl Into<PathBuf>) -> Self {
-		Self(dir.into())
+		Self {
+			dir: dir.into(),
+			billed: Cell::new(0),
+		}
 	}
 
 	pub fn path(&self) -> &Path {
-		&self.0
+		&self.dir
+	}
+
+	/// Cache misses since this `Work` was made — the calls a run actually paid for.
+	pub fn billed(&self) -> usize {
+		self.billed.get()
 	}
 
 	fn dir(&self, sub: &str) -> Result<PathBuf> {
-		let p = self.0.join(sub);
+		let p = self.dir.join(sub);
 		fs::create_dir_all(&p).wrap_err_with(|| format!("creating {}", p.display()))?;
 		Ok(p)
 	}
@@ -54,23 +66,40 @@ impl Work {
 
 	/// A cached POST. The key is the request itself, so editing a query refetches and rerunning does
 	/// not.
+	///
+	/// The key covers url and body but not headers, and a Places field mask is a header that changes
+	/// the response shape. Two callers asking the same body under different masks would share one
+	/// entry; today they do not, because they differ in the body as well.
 	pub fn cached_post(&self, url: &str, body: &serde_json::Value, headers: &[(&str, &str)]) -> Result<serde_json::Value> {
-		let canonical = serde_json::to_string(body)?;
-		let key = hex(Sha256::digest(format!("{url}\n{canonical}").as_bytes()).as_slice());
-		let dst = self.dir("data/places_cache")?.join(format!("{key}.json"));
-		if let Ok(s) = fs::read_to_string(&dst) {
-			return serde_json::from_str(&s).wrap_err_with(|| format!("cached response {} is not JSON", dst.display()));
+		if let Some(hit) = self.cached(url, body)? {
+			return Ok(hit);
 		}
+		let canonical = serde_json::to_string(body)?;
+		let dst = self.post_path(url, &canonical)?;
 		let mut req = ureq::post(url).header("Content-Type", "application/json");
 		for (k, v) in headers {
 			req = req.header(*k, *v);
 		}
+		self.billed.set(self.billed.get() + 1);
 		let mut res = req.send(canonical.as_bytes()).wrap_err_with(|| format!("POST {url}"))?;
 		let mut text = String::new();
 		res.body_mut().as_reader().read_to_string(&mut text)?;
 		let json: serde_json::Value = serde_json::from_str(&text).wrap_err_with(|| format!("POST {url} returned non-JSON: {}", &text[..text.len().min(400)]))?;
 		fs::write(&dst, &text)?;
 		Ok(json)
+	}
+
+	/// The response to this exact request, if it has been made before. Reading the probe's orderings
+	/// back this way is what keeps a refit from turning into a purchase.
+	pub fn cached(&self, url: &str, body: &serde_json::Value) -> Result<Option<serde_json::Value>> {
+		let dst = self.post_path(url, &serde_json::to_string(body)?)?;
+		let Ok(s) = fs::read_to_string(&dst) else { return Ok(None) };
+		serde_json::from_str(&s).map(Some).wrap_err_with(|| format!("cached response {} is not JSON", dst.display()))
+	}
+
+	fn post_path(&self, url: &str, canonical: &str) -> Result<PathBuf> {
+		let key = hex(Sha256::digest(format!("{url}\n{canonical}").as_bytes()).as_slice());
+		Ok(self.dir("data/places_cache")?.join(format!("{key}.json")))
 	}
 
 	/// A cached GET of a JSON document that never changes under us within a study.

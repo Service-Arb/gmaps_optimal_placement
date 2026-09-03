@@ -15,12 +15,14 @@ document, never to the code.
    │   GridSource ─ INSEE Filosofi 200 m           │
    │               GEOSTAT 1 km                    │
    │   PoiSource  ─ Google Places                  │
+   │   probe      ─ the same, asked from a node    │
    │   SearchVolume ─ Google Ads · DataForSEO      │
    └───────────────┬───────────────────────────────┘
-                   │  cells + named columns, POIs + tiers, keyword series
+                   │  cells + named columns, POIs + tiers, orderings, keyword series
    ┌───────────────┴───────────────────────────────┐
    │ service_arb_core     no I/O, wasm-safe        │
    │   Reproject · CellId · Grid · Expr            │
+   │   rank — features, Plackett–Luce, COEF        │
    │   Payload — the whole thin waist              │
    │   model — pressure, unmet, capture, top-N     │
    └───────┬───────────────────────────┬───────────┘
@@ -47,6 +49,11 @@ the top-N sweep are recomputed in the page, because they are functions of λ and
 which are live controls. Moving either side across this line costs the map its interactivity or the
 study its reproducibility.
 
+Competitor weight is baked, and deliberately: `rank` scores every competitor once in `build`, before
+the payload is serialised, so the browser only re-weights by tier and λ. Whatever the scoring
+function grows into, it never has to reach wasm. The one thing scored live is the what-if — one
+business, one arithmetic pass.
+
 Both sides are Rust. `service_arb_core` is wasm-safe and holds the model, so the same code that
 `cargo t` pins against a fixture is the code the browser runs.
 
@@ -67,7 +74,13 @@ app, so every entry point in `map_core.js` returns a banner string instead.
 - **No fallbacks on missing or malformed data.** A cell that will not parse is an error, never a
   zero. Imputed-versus-observed provenance survives to the map.
 - **Config defines the model; code defines the mechanism.** Anything a study would want to vary
-  belongs in the study file. Anything two studies share belongs in Rust.
+  belongs in the study file. Anything two studies share belongs in Rust. How Google ranks is the
+  same mechanism for a plumber and a detailer, so the reviews→prominence curve is a fitted constant
+  in `core::rank`, not an expression a study writes; what the study says is which queries it cares
+  about and what each is worth.
+- **A fitted quantity is refitted, never hand-edited.** `rank::COEF` is the output of
+  `service_arb fit` over the orderings in the work dir. Nudging a coefficient because the map looks
+  wrong turns a measurement back into the guess it replaced.
 - **The study file is a seed, never a sink.** `serve` only reads it. Pins promoted or hidden on the
   map are a diff beside it, under `XDG_DATA_HOME` — data, not cache, because a promoted candidate is
   a decision and cache is what cleaners delete.
@@ -119,7 +132,16 @@ guess into authority. The worked examples are in `examples/`.
 - **Tiering is name-based.** A shop whose name says nothing about what it does is tiered on what its
   name does say.
 - **Every constant in a study is a guess with a sane magnitude**, not a fitted value. They are in
-  the study file so they can be argued with.
+  the study file so they can be argued with. Competitor weight is the exception: it comes out of
+  `rank`, and the three things below are what that estimate cannot settle.
+- **Reviews cause rank and rank causes reviews.** A shop ranks well and is therefore seen, clicked
+  and reviewed. The coefficient is co-movement, not causation, so the what-if reads "reviews
+  associated with that rank" and never "reviews needed".
+- **The Places API ordering is not the local pack** a customer sees in Maps. It correlates with it;
+  it is a different list, from a different endpoint, with no personalisation and no map viewport.
+- **Name relevance is observed after Google's own filter.** These results came back *because* they
+  matched the query, so the variation among them is compressed and the name coefficient rests on the
+  businesses that sat at the censoring boundary.
 - **City-level search volumes are bucketed and small.** Keyword Planner rounds hard (0, 10, 20, 30,
   50, 70, 90, 110…) and an account with no campaign spend gets the coarsest treatment. For a niche
   trade in a 150k city, expect a line in the tens that moves in steps. The shape of the year is

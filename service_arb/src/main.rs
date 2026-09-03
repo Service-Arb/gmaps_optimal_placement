@@ -29,6 +29,21 @@ enum Cmd {
 		#[arg(short, long)]
 		out: Option<PathBuf>,
 	},
+	/// Ask Google the study's terms from equal-demand nodes, so the ranking model has orderings a
+	/// searcher could have produced
+	Probe {
+		config: PathBuf,
+		/// Print the node placement and the call budget, spend nothing
+		#[arg(long)]
+		dry_run: bool,
+	},
+	/// Refit the ranking model over every ordering in the work dir, and print the table that goes
+	/// into `service_arb_core::rank::COEF`. How Google ranks is one mechanism, so pass every study
+	/// there is evidence from
+	Fit {
+		#[arg(required = true)]
+		config: Vec<PathBuf>,
+	},
 	/// Print the study document's JSON schema
 	Schema,
 }
@@ -45,6 +60,17 @@ fn main() -> Result<()> {
 			let payload = service_arb::load(&config)?.build(&work)?;
 			report(service_arb::stats(&payload));
 			service_arb_web::serve::serve(payload, SocketAddr::from(([127, 0, 0, 1], port)), open)
+		}
+		Cmd::Probe { config, dry_run } => {
+			service_arb::load(&config)?.probe(&work, dry_run)?;
+			Ok(())
+		}
+		Cmd::Fit { config } => {
+			let studies = config.iter().map(|c| service_arb::load(c)).collect::<Result<Vec<_>>>()?;
+			let lambda: Vec<f64> = studies.iter().map(|s| s.model.lambda_m).collect();
+			let fit: service_arb::fit::Fit = studies.iter().map(|s| s.observations(&work)).collect::<Result<Vec<_>>>()?.into_iter().collect();
+			report(fit.stats(&lambda));
+			fit.check()
 		}
 		Cmd::Searches { config, out } => {
 			let payload = service_arb::load(&config)?.searches(&work)?;

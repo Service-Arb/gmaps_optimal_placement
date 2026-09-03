@@ -104,9 +104,11 @@ impl State {
 		self.heavy.with_value(|h| {
 			let Some(m) = &h.model else { return };
 			self.report.set(Some(m.site_report(
-				pin.at[0],
-				pin.at[1],
+				pin.at,
 				label.as_deref(),
+				// a ranked pick is a cell centroid with a number for a label, and there is no trading
+				// name to score
+				pin.label.is_none().then_some(pin.name.as_str()),
 				self.lambda.get_untracked(),
 				&h.press,
 				&self.tiers.get_untracked(),

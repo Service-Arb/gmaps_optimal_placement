@@ -54,9 +54,20 @@ let clermont = import ./_Clermont-Ferrand.nix; in
   # it moves the ticket, which this map does not model. Hence the far flatter exponent than detailing.
   model = {
     demand = "homes * (0.6 + old_share) * (0.5 + owner_share) * (max(nv, 4000) / 22000) ^ 0.4";
-    poi_weight = "clamp(sqrt(max(n_rev, 1) / 30), 0.4, 2.5)";
     # The plumber drives to the customer, not the other way round.
     lambda_m = 5000;
+  };
+
+  # Not `poi.queries`: those name the trade the way the trade names itself, which is exactly the
+  # variation the name coefficient cannot be fitted on. "chauffage" is what the customer types.
+  rank = {
+    nodes = 32;
+    radius_m = 4000;
+    term = [
+      { text = "plombier"; weight = 1.0; }
+      { text = "chauffage"; weight = 0.7; }
+      { text = "dépannage plomberie"; weight = 0.4; }
+    ];
   };
 
   layer = clermont.layer ++ [
