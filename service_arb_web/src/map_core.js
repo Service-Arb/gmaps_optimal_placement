@@ -96,11 +96,15 @@ export function competitors(el, json) {
 	if (!s) return;
 	for (const m of s.markers) m.setMap(null);
 	s.markers = JSON.parse(json).map(c => {
+		const scale = c.big ? 7 : 4.5;
 		const m = new google.maps.Marker({
 			position: { lat: c.lat, lng: c.lng }, title: c.name, zIndex: c.big ? 3 : 2,
+			label: c.n_rev ? { text: String(c.n_rev), className: 'nrev', color: '#fff', fontSize: '10px', fontWeight: '700' } : null,
 			icon: {
 				path: google.maps.SymbolPath.CIRCLE, fillColor: c.color, fillOpacity: 0.95,
-				strokeColor: '#fff', strokeWeight: 1.2, scale: c.big ? 7 : 4.5,
+				strokeColor: '#fff', strokeWeight: 1.2, scale,
+				// labelOrigin is in path units, so divide out the scale to keep the gap constant in pixels
+				labelOrigin: new google.maps.Point(0, -(scale + 8) / scale),
 			},
 		});
 		m.ti = c.ti;

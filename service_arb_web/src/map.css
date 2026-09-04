@@ -30,4 +30,5 @@ td:last-child{text-align:right;color:#fff;font-variant-numeric:tabular-nums;whit
 .k{color:#8fa3c8}
 #tip{position:absolute;z-index:6;pointer-events:none;background:#0e1116f2;color:#e8e8ea;
      border:1px solid #333a47;border-radius:6px;padding:6px 8px;font-size:11.5px;white-space:pre}
+.nrev{text-shadow:0 0 3px #000,0 0 2px #000;font-variant-numeric:tabular-nums}
 .sw{display:inline-block;width:9px;height:9px;border-radius:50%;border:1px solid #fff;vertical-align:-1px}
