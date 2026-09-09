@@ -5,10 +5,10 @@ holding what every trade in it shares — frame, grid, raw INSEE layers, the loc
 resolves against — pulled in with `import`.
 
 ```
-_Clermont-Ferrand.nix
-   ^                ^
-   |                |
-car_detailing_-_Clermont-Ferrand.nix   plumbing_-_Clermont-Ferrand.nix
+              _Clermont-Ferrand.nix
+        ^               ^               ^
+        |               |               |
+car_detailing_-_   plumbing_-_    cleaning_-_Clermont-Ferrand.nix
    poi / column / model / searches.group are the trade
 ```
 
