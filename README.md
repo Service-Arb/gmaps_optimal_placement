@@ -1,19 +1,19 @@
-# service_arb
+# gmaps_optimal_placement
 ![Minimum Supported Rust Version](https://img.shields.io/badge/nightly-1.92+-ab6000.svg)
-![Lines Of Code](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/valeratrades/b48e6f02c61942200e7d1e3eeabf9bcb/raw/service_arb-loc.json)
+![Lines Of Code](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/valeratrades/b48e6f02c61942200e7d1e3eeabf9bcb/raw/gmaps_optimal_placement-loc.json)
 <br>
-[<img alt="ci errors" src="https://img.shields.io/github/actions/workflow/status/valeratrades/service_arb/errors.yml?branch=main&style=for-the-badge&style=flat-square&label=errors&labelColor=420d09" height="20">](https://github.com/valeratrades/service_arb/actions?query=branch%3Amain) <!--NB: Won't find it if repo is private-->
-[<img alt="ci warnings" src="https://img.shields.io/github/actions/workflow/status/valeratrades/service_arb/warnings.yml?branch=main&style=for-the-badge&style=flat-square&label=warnings&labelColor=d16002" height="20">](https://github.com/valeratrades/service_arb/actions?query=branch%3Amain) <!--NB: Won't find it if repo is private-->
+[<img alt="ci errors" src="https://img.shields.io/github/actions/workflow/status/Service-Arb/gmaps_optimal_placement/errors.yml?branch=main&style=for-the-badge&style=flat-square&label=errors&labelColor=420d09" height="20">](https://github.com/Service-Arb/gmaps_optimal_placement/actions?query=branch%3Amain) <!--NB: Won't find it if repo is private-->
+[<img alt="ci warnings" src="https://img.shields.io/github/actions/workflow/status/Service-Arb/gmaps_optimal_placement/warnings.yml?branch=main&style=for-the-badge&style=flat-square&label=warnings&labelColor=d16002" height="20">](https://github.com/Service-Arb/gmaps_optimal_placement/actions?query=branch%3Amain) <!--NB: Won't find it if repo is private-->
 
 Where should a service business open?
 
 One Nix file describes an area, a statistical grid, what counts as a competitor, and how demand
-follows from the columns that grid publishes. `service_arb` paints that demand under the
+follows from the columns that grid publishes. `gmaps_optimal_placement` paints that demand under the
 competitors already on the ground and writes one self-contained HTML map. How much any one
-competitor counts is fitted, not guessed: `service_arb probe` asks Google the study's own queries
-from equal-demand points across the area, and `service_arb fit` estimates what its ordering rewards.
+competitor counts is fitted, not guessed: `gmaps_optimal_placement probe` asks Google the study's own queries
+from equal-demand points across the area, and `gmaps_optimal_placement fit` estimates what its ordering rewards.
 
-The same file can name groups of queries, and `service_arb searches` charts how often each group is
+The same file can name groups of queries, and `gmaps_optimal_placement searches` charts how often each group is
 asked for over the trailing year — the map says where the people are, this says how many of them
 are looking for the thing.
 
@@ -29,7 +29,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the invariants, and
 </summary>
 
 ```sh
-cargo install --path service_arb
+cargo install --path gmaps_optimal_placement
 ```
 
 </details>
@@ -40,17 +40,17 @@ cargo install --path service_arb
 ## Set your Google Maps API key. The server reads it; it never lands in a file.
 export GOOGLE_MAPS_KEY=...
 
-## Serve the map. Bulk archives and API responses cache in $SERVICE_ARB_WORK (default ./tmp/geo);
-## candidates you promote from the map land in $XDG_DATA_HOME/service_arb.
-service_arb serve examples/car_detailing_-_Clermont-Ferrand.nix --open
+## Serve the map. Bulk archives and API responses cache in $GMAPS_OPTIMAL_PLACEMENT_WORK (default ./tmp/geo);
+## candidates you promote from the map land in $XDG_DATA_HOME/gmaps_optimal_placement.
+gmaps_optimal_placement serve examples/car_detailing_-_Clermont-Ferrand.nix --open
 
 ## Chart the monthly search volume of each query group. Set the credentials of the provider first:
 ## GOOGLE_ADS_{DEVELOPER_TOKEN,CLIENT_ID,CLIENT_SECRET,REFRESH_TOKEN,CUSTOMER_ID}, or
 ## DATAFORSEO_{LOGIN,PASSWORD}.
-service_arb searches examples/car_detailing_-_Clermont-Ferrand.nix
+gmaps_optimal_placement searches examples/car_detailing_-_Clermont-Ferrand.nix
 
 ## Show the schema of the study document.
-service_arb schema
+gmaps_optimal_placement schema
 ```
 
 ## Sources

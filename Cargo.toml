@@ -1,5 +1,10 @@
 [workspace]
-members = ["service_arb", "service_arb_core", "service_arb_sources", "service_arb_web"]
+members = [
+    "gmaps_optimal_placement",
+    "gmaps_optimal_placement_core",
+    "gmaps_optimal_placement_sources",
+    "gmaps_optimal_placement_web",
+]
 resolver = "3"
 
 [workspace.package]
@@ -7,7 +12,7 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Valeriy Sakharov <valeratrades@gmail.com>"]
 license = "BlueOak-1.0.0"
-repository = "https://github.com/valeratrades/service_arb"
+repository = "https://github.com/Service-Arb/gmaps_optimal_placement"
 readme = "README.md"
 
 [workspace.lints.clippy]
@@ -18,9 +23,9 @@ len_zero = "allow"
 unused_features = "allow"
 
 [workspace.dependencies]
-service_arb_core = { path = "service_arb_core", version = "0.1.0" }
-service_arb_sources = { path = "service_arb_sources", version = "0.1.0" }
-service_arb_web = { path = "service_arb_web", version = "0.1.0" }
+gmaps_optimal_placement_core = { path = "gmaps_optimal_placement_core", version = "0.1.0" }
+gmaps_optimal_placement_sources = { path = "gmaps_optimal_placement_sources", version = "0.1.0" }
+gmaps_optimal_placement_web = { path = "gmaps_optimal_placement_web", version = "0.1.0" }
 
 base64 = "0.22"
 clap = "4"

@@ -1,1 +1,1 @@
-cargo install --path service_arb
+cargo install --path gmaps_optimal_placement

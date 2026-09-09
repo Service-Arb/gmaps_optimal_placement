@@ -2,7 +2,7 @@
  *
  * Only what is genuinely browser-shaped lives here: the island hydrates, the canvas actually
  * paints, the markers attach, and a pin round-trips through the server to the file under
- * XDG_DATA_HOME. The model's own numbers moved to `cargo t -p service_arb_core`, which checks them
+ * XDG_DATA_HOME. The model's own numbers moved to `cargo t -p gmaps_optimal_placement_core`, which checks them
  * against the same Clermont fixture with no browser and no key.
  *
  * Writes pins, so the caller must point XDG_DATA_HOME somewhere disposable. */
@@ -13,7 +13,7 @@ const path = require("node:path");
 
 const URL_ = process.argv[2] || "http://localhost:8731/";
 const PORT = 9333;
-const PINS = path.join(process.env.XDG_DATA_HOME || "", "service_arb", "pins-car_detailing_-_Clermont-Ferrand.json");
+const PINS = path.join(process.env.XDG_DATA_HOME || "", "gmaps_optimal_placement", "pins-car_detailing_-_Clermont-Ferrand.json");
 const PROMOTED = "Smoke Site";
 
 const chrome = spawn("chromium", [

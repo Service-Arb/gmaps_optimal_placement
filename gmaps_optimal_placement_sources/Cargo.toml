@@ -1,0 +1,29 @@
+[package]
+name = "gmaps_optimal_placement_sources"
+description = "Statistical grids and point-of-interest inventories for gmaps_optimal_placement"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64.workspace = true
+csv.workspace = true
+eyre.workspace = true
+gmaps_optimal_placement_core.workspace = true
+indexmap.workspace = true
+regex.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+ureq.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+gmaps_optimal_placement_core.workspace = true
+zip.workspace = true
+
+[lints]
+workspace = true

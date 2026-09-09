@@ -1,0 +1,23 @@
+[package]
+name = "gmaps_optimal_placement_core"
+description = "Grid cells, EPSG:3035 reprojection and column expressions for gmaps_optimal_placement"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+evalexpr.workspace = true
+eyre.workspace = true
+indexmap.workspace = true
+proj4rs.workspace = true
+schemars.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

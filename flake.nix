@@ -12,7 +12,7 @@
         pkgs = import v_flakes.default_nixpkgs { inherit system; config.allowUnfree = true; };
         rust = v_flakes.rs.default_nightly system;
         pre-commit-check = pre-commit-hooks.lib.${system}.run (v_flakes.files.preCommit { inherit pkgs; stripClaudeSignature = true; });
-        pname = (pkgs.lib.importTOML ./service_arb/Cargo.toml).package.name;
+        pname = (pkgs.lib.importTOML ./gmaps_optimal_placement/Cargo.toml).package.name;
         # inherited from the workspace, so it is not in the member's own `[package]`
         version = (pkgs.lib.importTOML ./Cargo.toml).workspace.package.version;
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
@@ -64,10 +64,10 @@
         # The server binary and the wasm client are separate compilations (`ssr` vs `hydrate`), so
         # this is the one place that knows how to produce both. Sourced by every app below.
         client = ''
-          cargo build -p service_arb_web --target wasm32-unknown-unknown --features hydrate --no-default-features
+          cargo build -p gmaps_optimal_placement_web --target wasm32-unknown-unknown --features hydrate --no-default-features
           mkdir -p target/site/pkg
-          wasm-bindgen --target web --out-dir target/site/pkg --out-name service_arb_web \
-            target/wasm32-unknown-unknown/debug/service_arb_web.wasm
+          wasm-bindgen --target web --out-dir target/site/pkg --out-name gmaps_optimal_placement_web \
+            target/wasm32-unknown-unknown/debug/gmaps_optimal_placement_web.wasm
         '';
 
         # The smoke test asserts Clermont's numbers, so it takes no study: `smoke.js` and
@@ -82,12 +82,12 @@
             # the smoke promotes and drops pins, so it gets a data dir of its own
             XDG_DATA_HOME="$(mktemp -d)"
             export XDG_DATA_HOME
-            cargo run -p service_arb -- serve examples/car_detailing_-_Clermont-Ferrand.nix --port ${toString port} &
+            cargo run -p gmaps_optimal_placement -- serve examples/car_detailing_-_Clermont-Ferrand.nix --port ${toString port} &
             server=$!
             trap 'kill $server 2>/dev/null || true; rm -rf "$XDG_DATA_HOME"' EXIT
             # the router only exists once the study is evaluated, which reads an 87 MB archive
             for _ in $(seq 120); do
-              curl -sf -o /dev/null "http://localhost:${toString port}/pkg/service_arb_web.js" && break
+              curl -sf -o /dev/null "http://localhost:${toString port}/pkg/gmaps_optimal_placement_web.js" && break
               sleep 1
             done
             node examples/smoke.js "http://localhost:${toString port}/"
@@ -103,7 +103,7 @@
             cd "$(git rev-parse --show-toplevel)"
             ${client}
             fuser -k ${toString port}/tcp 2>/dev/null || true
-            exec cargo run -p service_arb -- serve "$config" --port ${toString port} --open
+            exec cargo run -p gmaps_optimal_placement -- serve "$config" --port ${toString port} --open
           '';
         };
         # `searches <study.nix>` — build the volume chart, serve it, open it.
@@ -114,8 +114,8 @@
             [ $# -eq 1 ] || { echo "usage: nix run .#searches <study.nix>" >&2; exit 1; }
             config="$(realpath "$1")"
             cd "$(git rev-parse --show-toplevel)"
-            out="''${SERVICE_ARB_WORK:-tmp/geo}/out"
-            cargo run -p service_arb -- searches "$config" --out "$out/searches.html"
+            out="''${GMAPS_OPTIMAL_PLACEMENT_WORK:-tmp/geo}/out"
+            cargo run -p gmaps_optimal_placement -- searches "$config" --out "$out/searches.html"
             fuser -k ${toString port}/tcp 2>/dev/null || true
             xdg-open "http://localhost:${toString port}/searches.html" &
             cd "$out" && python3 -m http.server ${toString port}
@@ -130,9 +130,9 @@
             nix run .#searches <study.nix>  open the monthly search-volume chart for the study's query groups
             nix run .#study                 serve the Clermont map and assert it in headless Chromium
             nix run .#help                  this
-            cached archives and API responses live under $SERVICE_ARB_WORK (default tmp/geo);
-            promoted candidates live under $XDG_DATA_HOME/service_arb
-            a study is a Nix file evaluating to the attrset `service_arb schema` describes: area, grid,
+            cached archives and API responses live under $GMAPS_OPTIMAL_PLACEMENT_WORK (default tmp/geo);
+            promoted candidates live under $XDG_DATA_HOME/gmaps_optimal_placement
+            a study is a Nix file evaluating to the attrset `gmaps_optimal_placement schema` describes: area, grid,
             poi (queries + weighted tiers), column, model, layer, candidate, and an optional searches block.
             EOF
           '';
@@ -160,12 +160,12 @@
             # to place the client where `LEPTOS_SITE_ROOT` will point at runtime.
             buildPhase = ''
               runHook preBuild
-              cargo build --release -p service_arb --bin ${pname}
-              cargo build --release -p service_arb_web --lib --target wasm32-unknown-unknown --features hydrate --no-default-features
+              cargo build --release -p gmaps_optimal_placement --bin ${pname}
+              cargo build --release -p gmaps_optimal_placement_web --lib --target wasm32-unknown-unknown --features hydrate --no-default-features
               mkdir -p target/site/pkg
-              wasm-bindgen --target web --out-dir target/site/pkg --out-name service_arb_web \
-                target/wasm32-unknown-unknown/release/service_arb_web.wasm
-              wasm-opt -Oz target/site/pkg/service_arb_web_bg.wasm -o target/site/pkg/service_arb_web_bg.wasm
+              wasm-bindgen --target web --out-dir target/site/pkg --out-name gmaps_optimal_placement_web \
+                target/wasm32-unknown-unknown/release/gmaps_optimal_placement_web.wasm
+              wasm-opt -Oz target/site/pkg/gmaps_optimal_placement_web_bg.wasm -o target/site/pkg/gmaps_optimal_placement_web_bg.wasm
               runHook postBuild
             '';
 

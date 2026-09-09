@@ -1,4 +1,4 @@
-# service_arb
+# gmaps_optimal_placement
 
 Where should a service business open. One Nix file describes an area, a statistical grid, what
 counts as a competitor and how demand follows from whatever columns that grid publishes; the tool
@@ -10,31 +10,31 @@ document, never to the code.
 ```
               study.nix ─── the pinned interface
                    │
-   ┌───────────────┴───────────────────────────────┐
-   │ service_arb_sources        network, cache     │
-   │   GridSource ─ INSEE Filosofi 200 m           │
-   │               GEOSTAT 1 km                    │
-   │   PoiSource  ─ Google Places                  │
-   │   probe      ─ the same, asked from a node    │
-   │   SearchVolume ─ Google Ads · DataForSEO      │
-   └───────────────┬───────────────────────────────┘
+   ┌───────────────┴───────────────────────────────────────────┐
+   │ gmaps_optimal_placement_sources        network, cache     │
+   │   GridSource ─ INSEE Filosofi 200 m                       │
+   │               GEOSTAT 1 km                                │
+   │   PoiSource  ─ Google Places                              │
+   │   probe      ─ the same, asked from a node                │
+   │   SearchVolume ─ Google Ads · DataForSEO                  │
+   └───────────────┬───────────────────────────────────────────┘
                    │  cells + named columns, POIs + tiers, orderings, keyword series
-   ┌───────────────┴───────────────────────────────┐
-   │ service_arb_core     no I/O, wasm-safe        │
-   │   Reproject · CellId · Grid · Expr            │
-   │   rank — features, Plackett–Luce, COEF        │
-   │   Payload — the whole thin waist              │
-   │   model — pressure, unmet, capture, top-N     │
-   └───────┬───────────────────────────┬───────────┘
-           │  every expression         │  every slider
-   ┌───────┴──────────────┐   ┌────────┴──────────────────────┐
-   │ service_arb          │   │ service_arb_web               │
-   │   CLI, study, HTML   │──▶│   ssr: axum + server fns      │
-   └──────────────────────┘   │   hydrate: the MapView island │
-                              │   map_core.js: google.maps    │
-                              └────────┬──────────────────────┘
-                                       ▼
-                        a served map · one <name>-searches.html
+   ┌───────────────┴───────────────────────────────────────────┐
+   │ gmaps_optimal_placement_core     no I/O, wasm-safe        │
+   │   Reproject · CellId · Grid · Expr                        │
+   │   rank — features, Plackett–Luce, COEF                    │
+   │   Payload — the whole thin waist                          │
+   │   model — pressure, unmet, capture, top-N                 │
+   └───────┬───────────────────────────────────────┬───────────┘
+           │  every expression                     │  every slider
+   ┌───────┴──────────────────────────┐   ┌────────┴──────────────────────┐
+   │ gmaps_optimal_placement          │   │ gmaps_optimal_placement_web   │
+   │   CLI, study, HTML               │──▶│   ssr: axum + server fns      │
+   └──────────────────────────────────┘   │   hydrate: the MapView island │
+                                          │   map_core.js: google.maps    │
+                                          └────────┬──────────────────────┘
+                                                   ▼
+                                    a served map · one <name>-searches.html
 ```
 
 The map answers where the people are. It does not answer how many are looking for the thing, which
@@ -54,7 +54,7 @@ the payload is serialised, so the browser only re-weights by tier and λ. Whatev
 function grows into, it never has to reach wasm. The one thing scored live is the what-if — one
 business, one arithmetic pass.
 
-Both sides are Rust. `service_arb_core` is wasm-safe and holds the model, so the same code that
+Both sides are Rust. `gmaps_optimal_placement_core` is wasm-safe and holds the model, so the same code that
 `cargo t` pins against a fixture is the code the browser runs.
 
 ## The line between Rust and JavaScript
@@ -70,7 +70,7 @@ app, so every entry point in `map_core.js` returns a banner string instead.
 ## Invariants
 
 - **Reprojection is exact or the build fails.** A silently shifted grid is the one bug that looks
-  fine and is entirely wrong. Reference points are pinned in `service_arb_core::proj`.
+  fine and is entirely wrong. Reference points are pinned in `gmaps_optimal_placement_core::proj`.
 - **No fallbacks on missing or malformed data.** A cell that will not parse is an error, never a
   zero. Imputed-versus-observed provenance survives to the map.
 - **Config defines the model; code defines the mechanism.** Anything a study would want to vary
@@ -79,13 +79,13 @@ app, so every entry point in `map_core.js` returns a banner string instead.
   in `core::rank`, not an expression a study writes; what the study says is which queries it cares
   about and what each is worth.
 - **A fitted quantity is refitted, never hand-edited.** `rank::COEF` is the output of
-  `service_arb fit` over the orderings in the work dir. Nudging a coefficient because the map looks
+  `gmaps_optimal_placement fit` over the orderings in the work dir. Nudging a coefficient because the map looks
   wrong turns a measurement back into the guess it replaced.
 - **The study file is a seed, never a sink.** `serve` only reads it. Pins promoted or hidden on the
   map are a diff beside it, under `XDG_DATA_HOME` — data, not cache, because a promoted candidate is
   a decision and cache is what cleaners delete.
 - **`GOOGLE_MAPS_KEY` lives in the server's environment, never in an artifact.** Bulk archives and
-  API responses cache under `SERVICE_ARB_WORK` (default `./tmp/geo`) so a rerun costs nothing — the
+  API responses cache under `GMAPS_OPTIMAL_PLACEMENT_WORK` (default `./tmp/geo`) so a rerun costs nothing — the
   INSEE archive is ~87 MB and Places calls are billed.
 
 ## Sources are an enum
