@@ -15,7 +15,8 @@ fn fill(template: &str, subs: &[(&str, &str)]) -> Result<String> {
 	let mut html = template.to_owned();
 	for (tag, value) in subs {
 		ensure!(html.contains(tag), "placeholder {tag} missing from the template");
-		html = html.replacen(tag, value, 1);
+		// Every occurrence: the title is in both `<title>` and `<h1>`.
+		html = html.replace(tag, value);
 	}
 	Ok(html)
 }

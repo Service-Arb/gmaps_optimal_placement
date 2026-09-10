@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>__TITLE__</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  html,body,#map{height:100%;margin:0;background:#111}
+  .box{font:11.5px/1.45 system-ui,sans-serif;background:#1b1e23e8;color:#b8c0cc;padding:9px 11px;border-radius:8px;border:0}
+  .box b{color:#fff;font-size:12.5px}
+  .ramp{display:flex;height:9px;margin:6px 0 2px;border-radius:2px;overflow:hidden}
+  .ramp i{flex:1}
+  .ends{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums}
+  .note{color:#8892a0;margin-top:5px;max-width:270px}
+  .leaflet-tooltip{background:#1b1e23;color:#e8e8ea;border:0;box-shadow:none;font:11.5px/1.5 system-ui,sans-serif}
+  .leaflet-tooltip b{font-size:12.5px}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const D = /*__DATA__*/null, CAP = /*__CAP__*/0;
+// No basemap: one dot per unit already draws the country, and every keyless tile provider now
+// stamps its own watermark across it.
+const map = L.map('map', {preferCanvas: true, attributionControl: false}).setView([46.6, 2.6], 6);
+
+// Unlit grey through to the accent red. Squared so the top of the range keeps its resolution:
+// most of a country sits in the bottom fifth of any ratio like this.
+const col = v => {
+  const t = Math.sqrt(Math.min(v / CAP, 1));
+  return `rgb(${Math.round(58 + 197 * t)},${Math.round(63 - 18 * t)},${Math.round(74 + 11 * t)})`;
+};
+
+let hi = 0;
+for (const [, , , per] of D) hi = Math.max(hi, per);
+for (const [name, lat, lon, per, tally, rate] of D) {
+  L.circleMarker([lat, lon], {
+    radius: 3 + 19 * Math.sqrt(per / hi),
+    fillColor: col(rate), fillOpacity: 0.85, color: '#0008', weight: 0.5,
+  }).addTo(map).bindTooltip(
+    `<b>${name}</b><br>${rate} per 1000<br>${tally.toLocaleString('en')} of ${per.toLocaleString('en')}`,
+    {sticky: true});
+}
+
+const legend = L.control({position: 'bottomright'});
+legend.onAdd = () => {
+  const d = L.DomUtil.create('div', 'box');
+  d.innerHTML = `<b>__TITLE__</b><br>__SUB__` +
+    `<div class="ramp">${[...Array(28)].map((_, i) => `<i style="background:${col(CAP * i / 27)}"></i>`).join('')}</div>` +
+    `<div class="ends"><span>0</span><span>${CAP}+</span></div>` +
+    `<div class="note">Circle area is the denominator. The ramp tops out at the 98th percentile. Counts are the cadastre's own, per commune.</div>`;
+  return d;
+};
+legend.addTo(map);
+</script>
+</body>
+</html>

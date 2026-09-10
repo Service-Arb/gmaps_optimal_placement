@@ -17,9 +17,15 @@ document, never to the code.
    │   PoiSource  ─ Google Places                              │
    │   probe      ─ the same, asked from a node                │
    │   SearchVolume ─ Google Ads · DataForSEO                  │
-   └───────────────┬───────────────────────────────────────────┘
-                   │  cells + named columns, POIs + tiers, orderings, keyword series
-   ┌───────────────┴───────────────────────────────────────────┐
+   └──────┬────────────────────────────────────┬───────────────┘
+          │                                    │  the grid rolled up by commune
+          │              ┌─────────────────────┴─────────────────────┐
+          │              │ gmaps_optimal_placement_misc              │
+          │              │   Country · Tally — what a cadastre draws,│
+          │              │   per commune, ÷ any column, one map      │
+          │              └───────────────────────────────────────────┘
+          │  cells + named columns, POIs + tiers, orderings, keyword series
+   ┌──────┴────────────────────────────────────────────────────┐
    │ gmaps_optimal_placement_core     no I/O, wasm-safe        │
    │   Reproject · CellId · Grid · Expr                        │
    │   rank — features, Plackett–Luce, COEF                    │

@@ -10,6 +10,7 @@ use gmaps_optimal_placement_core::{
 	Reproject,
 	grid::{Bbox, Cell, CellId, Grid},
 };
+use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -113,10 +114,95 @@ pub fn load(source: GridSource, vintage: u16, bbox: Bbox, work: &Work) -> Result
 	ensure!(!grid.is_empty(), "no {source:?} cell falls inside {bbox:?}");
 
 	if source == GridSource::InseeFilosofi200m {
-		name_communes(&mut grid, work)?;
+		let labels = commune_names(&grid.cells.iter().map(|c| c.place.clone()).collect(), work)?;
+		for cell in &mut grid.cells {
+			cell.place = labels[&cell.place].clone();
+		}
 	}
 	Ok(grid)
 }
+
+/// One administrative unit of the source's own place column: every numeric column summed over its
+/// cells, and where those cells are.
+#[derive(Clone, Debug)]
+pub struct Place {
+	pub code: String,
+	/// The source's label for the code, or the code itself where it publishes none.
+	pub name: String,
+	/// [lat, lon]. The mean of the unit's cell centres, and Filosofi publishes only inhabited cells,
+	/// so this sits where the people are rather than in the middle of the commune's outline.
+	pub at: [f64; 2],
+	pub cells: usize,
+	pub sum: IndexMap<String, f64>,
+}
+
+/// The whole country rolled up by place, without the bbox that [`load`] needs: summing is O(units)
+/// where keeping the cells is O(cells), and for France that is 35 k against 2.3 M.
+pub fn places(source: GridSource, vintage: u16, work: &Work) -> Result<IndexMap<String, Place>> {
+	let a = source.archive(vintage)?;
+	let proj = Reproject::try_new()?;
+
+	let path = work.archive(a.url)?;
+	let file = std::fs::File::open(&path).wrap_err_with(|| format!("opening {}", path.display()))?;
+	let mut zip = zip::ZipArchive::new(std::io::BufReader::new(file)).wrap_err_with(|| format!("{} is not a zip", path.display()))?;
+	let member = zip.by_name(a.member).wrap_err_with(|| format!("{} has no member {:?}", path.display(), a.member))?;
+	let mut rdr = csv::ReaderBuilder::new().from_reader(std::io::BufReader::with_capacity(1 << 20, member));
+
+	let header: Vec<String> = rdr.headers()?.iter().map(str::to_owned).collect();
+	let at = |name: &str| {
+		header
+			.iter()
+			.position(|h| h == name)
+			.ok_or_else(|| eyre::eyre!("{:?} has no column {name:?}; header is {}", a.member, header.join(", ")))
+	};
+	let (i_id, i_place) = (at(a.id_col)?, at(a.place_col)?);
+	let numeric: Vec<usize> = (0..header.len()).filter(|i| !a.text_cols.contains(&header[*i].as_str())).collect();
+
+	// Summed in projected metres and reprojected once per unit rather than once per cell: at commune
+	// scale the two centres differ by centimetres, and this is 35 k reprojections instead of 2.3 M.
+	let mut laea: IndexMap<String, (f64, f64, usize)> = IndexMap::new();
+	let mut out: IndexMap<String, Place> = IndexMap::new();
+	let (mut scanned, mut row) = (0usize, csv::StringRecord::new());
+	while rdr.read_record(&mut row)? {
+		scanned += 1;
+		let id = &row[i_id];
+		let cell = CellId::parse(id).wrap_err_with(|| format!("row {scanned} of {:?}", a.member))?;
+		ensure!(cell.res_m == a.res_m, "{id} is a {} m cell, {:?} is meant to be {} m", cell.res_m, a.member, a.res_m);
+		// A cell straddling a border lists every commune it touches; the first is the dominant one.
+		let code = row[i_place].split(',').next().unwrap_or_default();
+		let half = a.res_m as f64 / 2.;
+		let e = laea.entry(code.to_owned()).or_insert((0., 0., 0));
+		*e = (e.0 + cell.east as f64 + half, e.1 + cell.north as f64 + half, e.2 + 1);
+		let place = out.entry(code.to_owned()).or_insert_with(|| Place {
+			code: code.to_owned(),
+			name: code.to_owned(),
+			at: [0., 0.],
+			cells: 0,
+			sum: IndexMap::new(),
+		});
+		place.cells += 1;
+		for &i in &numeric {
+			let raw = &row[i];
+			let v: f64 = raw.parse().wrap_err_with(|| format!("column {:?} of cell {id} is {raw:?}, not a number", header[i]))?;
+			*place.sum.entry(header[i].clone()).or_insert(0.) += v;
+		}
+	}
+	ensure!(!out.is_empty(), "{:?} published no cell at all", a.member);
+	for (code, (x, y, n)) in &laea {
+		let (lon, lat) = proj.to_wgs84(x / *n as f64, y / *n as f64)?;
+		out[code].at = [lat, lon];
+	}
+	eprintln!("{:?}: scanned {scanned} cells, rolled up into {} places", a.member, out.len());
+
+	if source == GridSource::InseeFilosofi200m {
+		let labels = commune_names(&out.keys().cloned().collect(), work)?;
+		for place in out.values_mut() {
+			place.name = labels[&place.code].clone();
+		}
+	}
+	Ok(out)
+}
+
 struct Archive {
 	url: &'static str,
 	member: &'static str,
@@ -129,17 +215,26 @@ struct Archive {
 	res_m: u32,
 }
 
-/// INSEE's `lcog_geo` is a commune code. The map wants the name.
-fn name_communes(grid: &mut Grid, work: &Work) -> Result<()> {
+/// INSEE's `lcog_geo` is a commune code. The map wants the name. Every code asked for comes back,
+/// naming itself where the current commune list no longer has it.
+fn commune_names(codes: &BTreeSet<String>, work: &Work) -> Result<HashMap<String, String>> {
 	let mut names: HashMap<String, String> = HashMap::new();
-	let depts: BTreeSet<&str> = grid.cells.iter().map(|c| &c.place[..2]).collect();
-	for d in depts {
-		let url = format!("https://geo.api.gouv.fr/departements/{d}/communes?fields=nom");
-		for c in work
-			.cached_get(&url, &format!("communes_{d}.json"))?
-			.as_array()
-			.ok_or_else(|| eyre::eyre!("{url} did not return an array"))?
-		{
+	let depts: BTreeSet<&str> = codes.iter().map(|c| &c[..2]).collect();
+	let urls = depts
+		.iter()
+		.map(|d| (format!("https://geo.api.gouv.fr/departements/{d}/communes?fields=nom"), format!("communes_{d}.json")));
+	// Paris, Lyon and Marseille are one commune each to the department list and a dozen to Filosofi,
+	// which counts their arrondissements. Asked for only when something went unnamed without it, so a
+	// study outside the three pays nothing.
+	let arm = std::iter::once((
+		"https://geo.api.gouv.fr/communes?type=arrondissement-municipal&fields=nom".to_owned(),
+		"communes_arrondissements.json".to_owned(),
+	));
+	for (url, cache) in urls.chain(arm) {
+		if codes.iter().all(|c| names.contains_key(c)) {
+			break;
+		}
+		for c in work.cached_get(&url, &cache)?.as_array().ok_or_else(|| eyre::eyre!("{url} did not return an array"))? {
 			let (code, nom) = (c["code"].as_str(), c["nom"].as_str());
 			let (Some(code), Some(nom)) = (code, nom) else {
 				bail!("{url} returned a commune without code and nom: {c}")
@@ -150,16 +245,18 @@ fn name_communes(grid: &mut Grid, work: &Work) -> Result<()> {
 	// A grid vintage is fixed; the commune list is current. Codes retired by a merger since keep
 	// their code as the label — this names a cell, it does not feed the model.
 	let mut retired = BTreeSet::new();
-	for cell in &mut grid.cells {
-		match names.get(&cell.place) {
-			Some(name) => cell.place = name.clone(),
-			None => {
-				retired.insert(cell.place.clone());
-			}
-		}
-	}
+	let out = codes
+		.iter()
+		.map(|code| {
+			let name = names.get(code).cloned().unwrap_or_else(|| {
+				retired.insert(code.clone());
+				code.clone()
+			});
+			(code.clone(), name)
+		})
+		.collect();
 	if !retired.is_empty() {
 		eprintln!("communes: {} code(s) no longer current, shown as codes: {retired:?}", retired.len());
 	}
-	Ok(())
+	Ok(out)
 }

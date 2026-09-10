@@ -14,6 +14,8 @@ use gmaps_optimal_placement_core::{
 	rank::{self, Biz, Feats, Rank},
 };
 pub use gmaps_optimal_placement_core::{Payload, payload};
+/// Whole-country reconnaissance rather than one agglomeration: which towns are worth a study.
+pub use gmaps_optimal_placement_misc as misc;
 pub use gmaps_optimal_placement_sources as sources;
 use gmaps_optimal_placement_sources::{Keyword, Ranking, Work, grid, poi, probe, searches};
 use indexmap::IndexMap;

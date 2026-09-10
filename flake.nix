@@ -122,12 +122,28 @@
           '';
         };
 
+        # `misc <country> <tally> [--per col] [--floor n]` — one map of a whole country, no study.
+        # Written per country and tally, so two denominators of the same tally overwrite each other.
+        misc = pkgs.writeShellApplication {
+          name = "misc-map";
+          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold xdg-utils nix ];
+          text = ''
+            [ $# -ge 2 ] || { echo "usage: nix run .#misc <country> <tally> [--per <column>] [--floor <n>]" >&2; exit 1; }
+            cd "$(git rev-parse --show-toplevel)"
+            out="''${GMAPS_OPTIMAL_PLACEMENT_WORK:-tmp/geo}/out/misc-$1-$2.html"
+            cargo run -p gmaps_optimal_placement -- misc "$@" --out "$out"
+            xdg-open "$out"
+          '';
+        };
+
         help = pkgs.writeShellApplication {
           name = "help";
           text = ''
             cat <<'EOF'
             nix run .#open     <study.nix>  serve the map on :${toString port} and open it (Ctrl-C to stop)
             nix run .#searches <study.nix>  open the monthly search-volume chart for the study's query groups
+            nix run .#misc <country> <tally>  which towns in a country to write a study about at all:
+                                            pool | building | parcel per --per column, --floor to skip hamlets
             nix run .#study                 serve the Clermont map and assert it in headless Chromium
             nix run .#help                  this
             cached archives and API responses live under $GMAPS_OPTIMAL_PLACEMENT_WORK (default tmp/geo);
@@ -144,6 +160,7 @@
           study = { type = "app"; program = pkgs.lib.getExe study; };
           open = { type = "app"; program = pkgs.lib.getExe open; };
           searches = { type = "app"; program = pkgs.lib.getExe searches; };
+          misc = { type = "app"; program = pkgs.lib.getExe misc; };
           help = { type = "app"; program = pkgs.lib.getExe help; };
         };
 
