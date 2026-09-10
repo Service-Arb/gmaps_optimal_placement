@@ -1080,7 +1080,6 @@ dependencies = [
  "flate2",
  "gmaps_optimal_placement_sources",
  "indexmap",
- "serde",
  "serde_json",
  "ureq",
 ]
