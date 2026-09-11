@@ -51,10 +51,6 @@ gmaps_optimal_placement searches examples/car_detailing_-_Clermont-Ferrand.nix
 
 ## Show the schema of the study document.
 gmaps_optimal_placement schema
-
-## Find the towns in a country that are worth a study. Count what a cadastre draws, per commune, and
-## divide by a column of the grid. Towns below the floor are not counted, and not downloaded.
-gmaps_optimal_placement misc france pool --per ind --floor 2000
 ```
 
 ## Sources
