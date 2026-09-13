@@ -1,15 +1,16 @@
 # Worked studies
 
-There is no code here. One file per `<trade>_-_<city>`, and a leading-underscore file per city
-holding what every trade in it shares — frame, grid, raw INSEE layers, the location search volume
-resolves against — pulled in with `import`.
+There is no code here. One file per `<trade>_-_<city>`, and leading-underscore files it pulls in with
+`import`: one per country for what the statistics office publishes, one per city for the frame.
 
 ```
-              _Clermont-Ferrand.nix
-        ^               ^               ^
-        |               |               |
-car_detailing_-_   plumbing_-_    cleaning_-_Clermont-Ferrand.nix
-   poi / column / model / searches.group are the trade
+                      _France.nix                grid, nv, the raw INSEE layers, the volume provider
+                   ^               ^
+       _Clermont-Ferrand.nix     _Lyon.nix       bbox, and the place volume resolves against
+        ^        ^        ^          ^
+car_detailing_  plumbing_  cleaning_-_Clermont-Ferrand.nix
+                           cleaning_-_Lyon.nix
+   poi / column / model / rank / searches.group are the trade
 ```
 
 ```fish
