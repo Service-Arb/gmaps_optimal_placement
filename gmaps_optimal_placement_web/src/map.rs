@@ -6,7 +6,7 @@ use gmaps_optimal_placement_core::{
 	Model,
 	model::{Report, TierState, fmt, ramp},
 };
-pub use imp::{activate, close, open, persist_keys};
+pub use imp::{activate, close, open, persist_keys, scroll_pick};
 use leptos::prelude::*;
 
 use crate::{
@@ -470,6 +470,7 @@ mod imp {
 	pub fn activate(_: State, _: usize) {}
 	pub fn close(_: State, _: usize) {}
 	pub fn persist_keys(_: State) {}
+	pub fn scroll_pick(_: usize) {}
 }
 
 #[cfg(feature = "hydrate")]
@@ -647,11 +648,19 @@ mod imp {
 		for stem in dir.open {
 			add(s, stem).await;
 		}
-		adopt(s, 0);
+		// a directory was served rather than a study, so the first choice is made the same way every
+		// later one is
+		match s.tabs.with_untracked(Vec::is_empty) {
+			true => s.picker.set(Some(Pool::All)),
+			false => adopt(s, 0),
+		}
 	}
 
 	/// Fetch a study, build its `Model`, and give it a tab. Mounts the map on the first one.
 	async fn add(s: State, stem: String) -> Option<usize> {
+		// a study the server has not built yet reads the grid archive and every POI page, which is
+		// tens of seconds of nothing to look at
+		s.banner.set(Some(format!("building {stem} …")));
 		let url = format!("/payload/{}", js_sys::encode_uri_component(&stem));
 		let payload = match get::<gmaps_optimal_placement_core::Payload>(&url).await {
 			Ok(p) => p,
@@ -667,6 +676,7 @@ mod imp {
 				return None;
 			}
 		};
+		s.banner.set(None);
 		let core = crate::pins::seed(&model.payload).await.unwrap_or_else(|e| {
 			s.banner.set(Some(format!("⚠ pins — {e}")));
 			Vec::new()
@@ -725,12 +735,13 @@ mod imp {
 			tier_counts: m.payload.tiers.iter().map(|t| m.payload.pois.iter().filter(|p| p.poi.tier == t.name).count()).collect(),
 			imputed: m.payload.imputed.iter().filter(|&&i| i == 1).count(),
 		}));
-		recompute(s);
 		document().set_title(&m.payload.name);
+		// before the sweep, which is the one slow thing here and which no marker depends on
 		if let Some(el) = host().filter(|_| s.mounted.get_untracked()) {
 			competitors_js(&el, &competitors(&m));
 			recenter_js(&el, m.payload.center[0], m.payload.center[1], m.payload.zoom);
 		}
+		recompute(s);
 	}
 
 	pub fn activate(s: State, i: usize) {
@@ -742,8 +753,11 @@ mod imp {
 	}
 
 	/// An already-open study is switched to rather than fetched twice.
+	///
+	/// Not `leptos::task::spawn_local`: the picker closes itself on the way in, and a task owned by a
+	/// component that is being disposed is dropped rather than run.
 	pub fn open(s: State, stem: String) {
-		leptos::task::spawn_local(async move {
+		wasm_bindgen_futures::spawn_local(async move {
 			if let Some(i) = s.tabs.with_untracked(|v| v.iter().position(|t| t.stem == stem)) {
 				return activate(s, i);
 			}
@@ -787,6 +801,20 @@ mod imp {
 		if let Some(el) = host().filter(|_| s.mounted.get_untracked()) {
 			cells_js(&el, &[], &[], &[], &[]);
 			competitors_js(&el, "[]");
+		}
+	}
+
+	/// The picker's cursor, kept inside its own scroll box. Rows are one line each — see `#picker li`
+	/// — so the cursor's offset is its index times a row.
+	pub fn scroll_pick(row: usize) {
+		let Some(li) = document().query_selector("#picker li.on").ok().flatten() else { return };
+		let Some(ul) = li.parent_element() else { return };
+		let (h, seen) = (li.client_height(), ul.client_height());
+		let (top, bottom) = (row as i32 * h, (row as i32 + 1) * h);
+		if top < ul.scroll_top() {
+			ul.set_scroll_top(top);
+		} else if bottom > ul.scroll_top() + seen {
+			ul.set_scroll_top(bottom - seen);
 		}
 	}
 
@@ -836,20 +864,41 @@ mod imp {
 		if let Ok(d) = k.parse::<usize>() {
 			let i = if d == 0 { n.checked_sub(1) } else { (d <= n).then(|| d - 1) };
 			if let Some(i) = i {
+				ev.prevent_default();
 				activate(s, i);
 			}
 			return;
 		}
 		let m = s.keys.get_untracked();
 		let at = s.active.get_untracked();
-		match k {
-			_ if k == m.open => s.picker.set(Some(Pool::All)),
-			_ if k == m.find => s.picker.set(Some(Pool::Open)),
-			_ if n == 0 => {}
-			_ if k == m.prev => activate(s, (at + n - 1) % n),
-			_ if k == m.next => activate(s, (at + 1) % n),
-			_ if k == m.close => close(s, at),
-			_ => {}
+		let ours = match k {
+			_ if k == m.open => {
+				s.picker.set(Some(Pool::All));
+				true
+			}
+			_ if k == m.find => {
+				s.picker.set(Some(Pool::Open));
+				true
+			}
+			_ if n == 0 => false,
+			_ if k == m.prev => {
+				activate(s, (at + n - 1) % n);
+				true
+			}
+			_ if k == m.next => {
+				activate(s, (at + 1) % n);
+				true
+			}
+			_ if k == m.close => {
+				close(s, at);
+				true
+			}
+			_ => false,
+		};
+		// the picker focuses its field as it opens, so without this the key that opened it is the
+		// field's first character
+		if ours {
+			ev.prevent_default();
 		}
 	}
 

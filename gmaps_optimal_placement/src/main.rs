@@ -13,8 +13,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-	/// Where the people are: demand under the competitors, as a map served from here. A directory is
-	/// offered through `fzf`, and whatever is picked opens as a tab over one map
+	/// Where the people are: demand under the competitors, as a map served from here. A directory
+	/// opens the page on its own picker; a file opens as the one tab, already built
 	Serve {
 		#[arg(default_value = "examples/studies")]
 		config: PathBuf,
@@ -75,17 +75,18 @@ fn main() -> Result<()> {
 			Ok(())
 		}
 		Cmd::Serve { config, port, open } => {
-			// eagerly, and here rather than in the server: a study that will not build must fail before
-			// the listener binds, and each one's statistics still print
-			let prebuilt = gmaps_optimal_placement::pick(&config, true)?
-				.iter()
-				.map(|p| {
-					let payload = gmaps_optimal_placement::load(p)?.build(&work)?;
+			// the page picks out of a directory, so `fzf` is not one of two pickers to learn. A named
+			// file is built here instead: its statistics print, and a study that will not build fails
+			// before the listener binds
+			let (dir, prebuilt) = match config.is_dir() {
+				true => (config, Vec::new()),
+				false => {
+					let payload = gmaps_optimal_placement::load(&config)?.build(&work)?;
 					report(gmaps_optimal_placement::stats(&payload));
-					Ok((stem(p), serde_json::to_string(&payload)?))
-				})
-				.collect::<Result<Vec<_>>>()?;
-			let dir = if config.is_dir() { config } else { config.parent().unwrap_or(&config).to_owned() };
+					let one = vec![(stem(&config), serde_json::to_string(&payload)?)];
+					(config.parent().unwrap_or(&config).to_owned(), one)
+				}
+			};
 			// the work dir rather than `work` itself: `Work` holds a `Cell`, and the server calls this
 			// from whichever blocking thread a tab's first request landed on
 			let at = work.path().to_owned();
@@ -96,7 +97,7 @@ fn main() -> Result<()> {
 			gmaps_optimal_placement_web::serve::serve(dir, prebuilt, build, SocketAddr::from(([127, 0, 0, 1], port)), open)
 		}
 		Cmd::Probe { config, dry_run } => {
-			gmaps_optimal_placement::load(&one(&config)?)?.probe(&work, dry_run)?;
+			gmaps_optimal_placement::load(&gmaps_optimal_placement::pick(&config)?)?.probe(&work, dry_run)?;
 			Ok(())
 		}
 		Cmd::Fit { config } => {
@@ -118,21 +119,12 @@ fn main() -> Result<()> {
 			write(out.unwrap_or_else(|| work.path().join("out").join(format!("{}.html", compiled.name()))), &compiled.render()?)
 		}
 		Cmd::Searches { config, out } => {
-			let payload = gmaps_optimal_placement::load(&one(&config)?)?.searches(&work)?;
+			let payload = gmaps_optimal_placement::load(&gmaps_optimal_placement::pick(&config)?)?.searches(&work)?;
 			report(gmaps_optimal_placement::search_stats(&payload));
 			let html = gmaps_optimal_placement::render::render_searches(&payload)?;
 			write(out.unwrap_or_else(|| work.path().join("out").join(format!("{}-searches.html", payload.name))), &html)
 		}
 	}
-}
-
-/// The one study a subcommand that produces a single artifact works on.
-fn one(config: &std::path::Path) -> Result<PathBuf> {
-	let picked = gmaps_optimal_placement::pick(config, false)?;
-	let [path] = picked.as_slice() else {
-		eyre::bail!("expected one study, got {}", picked.len())
-	};
-	Ok(path.clone())
 }
 
 fn stem(p: &std::path::Path) -> String {

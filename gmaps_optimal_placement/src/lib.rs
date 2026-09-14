@@ -286,18 +286,18 @@ pub fn studies(dir: &Path) -> Result<Vec<PathBuf>> {
 	Ok(out)
 }
 
-/// Studies to work on. A directory is offered through `fzf`; a file is itself, so a scripted run
-/// never opens a picker.
-pub fn pick(path: &Path, multi: bool) -> Result<Vec<PathBuf>> {
+/// The study a one-artifact subcommand works on. A directory is offered through `fzf`; a file is
+/// itself, so a scripted run never opens a picker. `serve` does not come here — the page it serves
+/// has a picker of its own, and two pickers over one directory is one too many.
+pub fn pick(path: &Path) -> Result<PathBuf> {
 	if path.is_file() {
-		return Ok(vec![path.to_owned()]);
+		return Ok(path.to_owned());
 	}
 	let found = studies(path)?;
 	ensure!(!found.is_empty(), "no study under {}", path.display());
 	let stems: Vec<&str> = found.iter().map(|p| p.file_stem().and_then(|s| s.to_str()).expect("a study path is UTF-8")).collect();
 
 	let mut fzf = std::process::Command::new("fzf")
-		.args(multi.then_some("--multi"))
 		.stdin(std::process::Stdio::piped())
 		.stdout(std::process::Stdio::piped())
 		.spawn()
@@ -307,18 +307,13 @@ pub fn pick(path: &Path, multi: bool) -> Result<Vec<PathBuf>> {
 	drop(sink);
 	let out = fzf.wait_with_output()?;
 
-	let picked: Vec<&str> = std::str::from_utf8(&out.stdout)?.lines().collect();
+	let picked = std::str::from_utf8(&out.stdout)?.trim();
 	ensure!(!picked.is_empty(), "nothing picked out of {}", path.display());
-	picked
-		.into_iter()
-		.map(|s| {
-			let i = stems
-				.iter()
-				.position(|o| *o == s)
-				.ok_or_else(|| eyre::eyre!("fzf returned {s:?}, which is not a study under {}", path.display()))?;
-			Ok(found[i].clone())
-		})
-		.collect()
+	let i = stems
+		.iter()
+		.position(|o| *o == picked)
+		.ok_or_else(|| eyre::eyre!("fzf returned {picked:?}, which is not a study under {}", path.display()))?;
+	Ok(found[i].clone())
 }
 
 pub fn load(path: &Path) -> Result<Study> {

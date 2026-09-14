@@ -15,9 +15,9 @@ studies/  car_detailing_  plumbing_  cleaning_-_Clermont-Ferrand.nix
 ```
 
 ```fish
-nix run .#open                                      # pick studies out of studies/ with fzf, one tab each
-nix run .#open examples/studies/plumbing_-_Clermont-Ferrand.nix   # or name one
-nix run .#searches examples/studies                 # pick one; monthly volume per query group
+nix run .#open                                      # the page opens on a picker of studies/; t adds a tab
+nix run .#open examples/studies/plumbing_-_Clermont-Ferrand.nix   # or name one, built before it serves
+nix run .#searches examples/studies                 # fzf picks one; monthly volume per query group
 nix run .#study                                     # the detailing map, asserted in headless Chromium
 ```
 

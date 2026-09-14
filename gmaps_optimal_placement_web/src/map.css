@@ -16,15 +16,16 @@ html,body{margin:0;height:100%;font:13px/1.45 system-ui,sans-serif;background:#1
 #picker input[type=text]{width:100%;box-sizing:border-box;background:#2a2f38;color:#e8e8ea;
       border:1px solid #3a4150;border-radius:5px;padding:6px}
 #picker ul{list-style:none;margin:6px 0 0;padding:0;max-height:50vh;overflow:auto}
-#picker li{padding:4px 6px;border-radius:4px;cursor:pointer}
-#picker li:hover{background:#2f6df6;color:#fff}
+#picker li{padding:4px 6px;border-radius:4px;cursor:pointer;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#picker li.on{background:#2f6df6;color:#fff}
 #settings .row{justify-content:space-between}
 #settings button.sec{width:64px;margin:0;font-variant-numeric:tabular-nums}
 .panel{position:absolute;z-index:5;background:#1b1e23ee;color:#e8e8ea;border-radius:8px;
        padding:10px 12px;box-shadow:0 4px 18px #000a;backdrop-filter:blur(3px)}
 #ctl{top:10px;left:10px;width:266px;max-height:calc(100% - 20px);overflow:auto}
 #report{bottom:10px;left:10px;width:266px;max-height:52%;overflow:auto}
-#banner{position:absolute;z-index:7;top:10px;left:50%;transform:translateX(-50%);
+#banner{position:absolute;z-index:7;top:40px;left:50%;transform:translateX(-50%);
         background:#4a1d1de6;color:#ffb4b4;border:1px solid #7a2b2b;border-radius:6px;padding:6px 10px}
 h4{margin:0 0 6px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8fa3c8}
 label{display:block;margin:7px 0 2px;color:#b8c0cc;font-size:11.5px}

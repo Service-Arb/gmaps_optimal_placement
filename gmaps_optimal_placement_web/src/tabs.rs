@@ -6,12 +6,15 @@
 //!
 //! ```text
 //!   GET /studies.json   available: every stem in the directory
-//!                       open:      the ones the CLI prebuilt
+//!                       open:      the one the CLI was named, if it was named one
 //!        │
 //!   ┌────┴──── t ─→ Pool::All   filter the directory, open a new tab
-//!   │  Picker
+//!   │  Picker                   ↑ also where a served directory starts
 //!   └───────── f ─→ Pool::Open  filter the open tabs, switch to one
 //! ```
+//!
+//! This is the only picker: `serve` does not run `fzf` over a directory, because choosing the first
+//! study and choosing the fourth should not be two different motions.
 //!
 //! Chrome consumes `Ctrl+T`, `Ctrl+W` and `Ctrl+1..9` before a page sees them, so the defaults are
 //! bare keys. The map affords it: it has no text input outside the picker.
@@ -156,17 +159,21 @@ pub fn TabBar(state: State) -> impl IntoView {
 	}
 }
 
+/// ↑/↓ (and `Ctrl-P`/`Ctrl-N`) clamp at both ends rather than wrap, `Enter` takes the highlighted
+/// row, `Escape` closes. The cursor sits on the first hit, as `fzf`'s does, and every edit of the
+/// query puts it back there.
 #[component]
 pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 	let query = RwSignal::new(String::new());
-	let hits = move || {
+	let sel = RwSignal::new(0usize);
+	let hits = Memo::new(move |_| {
 		let q = query.get();
 		let all: Vec<(usize, String)> = match pool {
 			Pool::All => state.available.get().into_iter().enumerate().collect(),
 			Pool::Open => state.tabs.get().into_iter().enumerate().map(|(i, t)| (i, t.label)).collect(),
 		};
 		all.into_iter().filter(|(_, s)| subsequence(&q, s)).collect::<Vec<_>>()
-	};
+	});
 	let take = move |i: usize, name: String| {
 		state.picker.set(None);
 		match pool {
@@ -174,36 +181,73 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 			Pool::Open => crate::map::activate(state, i),
 		}
 	};
+	let field = NodeRef::<leptos::html::Input>::new();
+	// the overlay is modal, so the keys below are only ever the picker's
+	Effect::new(move |_| {
+		if let Some(el) = field.get() {
+			el.focus().expect("the picker's field takes focus");
+		}
+	});
+	// arrowing past the visible rows would otherwise leave the cursor off screen
+	Effect::new(move |_| crate::map::scroll_pick(sel.get()));
+
 	view! {
 		<div id="picker" class="panel">
 			<input
 				type="text"
-				autofocus
+				node_ref=field
 				placeholder=match pool {
 					Pool::All => "open a study",
 					Pool::Open => "find an open tab",
 				}
 				prop:value=move || query.get()
-				on:input=move |ev| query.set(event_target_value(&ev))
+				on:input=move |ev| {
+					query.set(event_target_value(&ev));
+					sel.set(0);
+				}
 				on:keydown=move |ev| {
-					match ev.key().as_str() {
-						"Escape" => state.picker.set(None),
-						"Enter" => {
-							if let Some((i, name)) = hits().into_iter().next() {
-								take(i, name);
-							}
+					let last = hits.with(|h| h.len()).saturating_sub(1);
+					let down = ev.key() == "ArrowDown" || (ev.ctrl_key() && ev.key() == "n");
+					let up = ev.key() == "ArrowUp" || (ev.ctrl_key() && ev.key() == "p");
+					if down || up {
+						ev.prevent_default();
+						return sel
+							.set(
+								if down {
+									(sel.get_untracked() + 1).min(last)
+								} else {
+									sel.get_untracked().saturating_sub(1)
+								},
+							);
+					}
+					if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
+						return;
+					}
+					if ev.key() == "Enter" {
+						ev.prevent_default();
+						if let Some((i, name)) = hits.with(|h| h.get(sel.get_untracked()).cloned()) {
+							take(i, name);
 						}
-						_ => {}
 					}
 				}
 			/>
 			<ul>
 				{move || {
-					hits()
+					hits
+						.get()
 						.into_iter()
-						.map(|(i, name)| {
+						.enumerate()
+						.map(|(row, (i, name))| {
 							let pick = name.clone();
-							view! { <li on:click=move |_| take(i, pick.clone())>{name}</li> }
+							view! {
+								<li
+									class:on=move || sel.get() == row
+									on:mouseenter=move |_| sel.set(row)
+									on:click=move |_| take(i, pick.clone())
+								>
+									{name}
+								</li>
+							}
 						})
 						.collect_view()
 				}}

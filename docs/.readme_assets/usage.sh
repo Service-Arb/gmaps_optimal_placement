@@ -1,8 +1,9 @@
 # Set your Google Maps API key. The server reads it; it never lands in a file.
 export GOOGLE_MAPS_KEY=...
 
-# Serve the map. Give a directory, and fzf shows the studies in it. Each study you select is a tab
-# over one map. Bulk archives and API responses cache in $GMAPS_OPTIMAL_PLACEMENT_WORK (default ./tmp/geo);
+# Serve the map. Give a directory, and the page shows a picker of the studies in it. Each study you
+# select is a tab over one map. Press `t` to open one more.
+# Bulk archives and API responses cache in $GMAPS_OPTIMAL_PLACEMENT_WORK (default ./tmp/geo);
 # candidates you promote from the map land in $XDG_DATA_HOME/gmaps_optimal_placement.
 gmaps_optimal_placement serve examples/studies --open
 

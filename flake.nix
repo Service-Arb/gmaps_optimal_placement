@@ -93,10 +93,11 @@
             node examples/smoke.js "http://localhost:${toString port}/"
           '';
         };
-        # `open [<study.nix>|<dir>]` — build the client, pick the studies, serve them, open a browser.
+        # `open [<study.nix>|<dir>]` — build the client, serve, open a browser. A directory lands on
+        # the page's own picker, which is also what `t` opens for every tab after the first.
         open = pkgs.writeShellApplication {
           name = "open-map";
-          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold psmisc xdg-utils nix fzf wasm-bindgen-cli ];
+          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold psmisc xdg-utils nix wasm-bindgen-cli ];
           text = ''
             [ $# -le 1 ] || { echo "usage: nix run .#open [<study.nix>|<dir>]" >&2; exit 1; }
             if [ $# -eq 1 ]; then config="$(realpath "$1")"; else config=""; fi
@@ -142,9 +143,10 @@
           text = ''
             cat <<'EOF'
             nix run .#open  [<study.nix>|<dir>]  serve the map on :${toString port} and open it (Ctrl-C to stop).
-                                            a directory (default examples/studies) is picked through fzf,
-                                            multi-select, and each pick is a tab over one map
-            nix run .#searches <study.nix|dir>  open the monthly search-volume chart for the study's query groups
+                                            a directory (default examples/studies) opens the page's own
+                                            picker; `t` opens another study, each as a tab over one map
+            nix run .#searches <study.nix|dir>  open the monthly search-volume chart for the study's query
+                                            groups. a directory is picked through fzf
             nix run .#misc <country> <tally>  which towns in a country to write a study about at all:
                                             pool | building | parcel per --per column, --floor to skip hamlets
             nix run .#study                 serve the Clermont map and assert it in headless Chromium

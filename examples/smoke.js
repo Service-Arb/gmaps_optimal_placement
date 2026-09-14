@@ -109,7 +109,6 @@ async function main() {
       tierRows: document.querySelectorAll('#ctl .row').length,
       ticks: [...document.querySelectorAll('#ticks span')].map(t => t.textContent).join(' '),
       note: document.querySelector('#ctl .note').innerText.replace(/\\n/g, ' '),
-      markers: document.querySelectorAll('#map [role=button]').length,
       banner: document.querySelector('#banner')?.innerText ?? null,
       canvas: [cv.width, cv.height],
       painted: (() => { const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
@@ -122,8 +121,9 @@ async function main() {
   assert.equal(s.layers, 8, "three live layers plus the study's five");
   assert.equal(s.tierRows, 3, "one row per tier, plus hide-imputed");
   assert(s.note.includes("10446 cells"), `legend counts the grid: ${s.note}`);
-  assert.equal(s.markers, 141, "140 competitor markers and the study's one candidate");
   assert(s.painted > 100, "canvas actually painted");
+  // a marker reaches the map a frame after the panel it belongs to, so this one settles like the rest
+  await expectMarkers(141, "140 competitor markers and the study's one candidate");
 
   // a click drops a pin and opens its card — the card is what makes a yellow pin reachable at all.
   // 430 rather than 400: `#tabs` pushes the map down its own height, and 400 now lands on a marker
