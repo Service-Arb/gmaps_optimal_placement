@@ -1,4 +1,4 @@
-let lyon = import ./_Lyon.nix; in
+let lyon = import ../_Lyon.nix; in
 {
   name = "cleaning_-_Lyon";
 

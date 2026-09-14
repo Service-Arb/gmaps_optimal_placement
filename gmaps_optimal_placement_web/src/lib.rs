@@ -6,6 +6,7 @@ pub mod map;
 pub mod pins;
 #[cfg(feature = "ssr")]
 pub mod serve;
+pub mod tabs;
 
 use leptos::prelude::*;
 

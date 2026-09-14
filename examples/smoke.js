@@ -83,6 +83,13 @@ async function main() {
     }
     throw new Error("the island never settled");
   };
+  const press = async key => {
+    await send("Input.dispatchKeyEvent", { type: "keyDown", key, text: key });
+    await send("Input.dispatchKeyEvent", { type: "keyUp", key });
+    await sleep(700);
+  };
+  const tabs = () => evaluate("[...document.querySelectorAll('#tabs .tab:not(.add)')].map(t => t.textContent.replace('●',''))");
+  const layers = () => evaluate("document.querySelectorAll('#ctl select option').length");
   // a click that raises a dialog blocks the page, so the evaluate must not be awaited
   const clickThrough = (expr, reply = null) => {
     answer = reply;
@@ -118,10 +125,11 @@ async function main() {
   assert.equal(s.markers, 141, "140 competitor markers and the study's one candidate");
   assert(s.painted > 100, "canvas actually painted");
 
-  // a click drops a pin and opens its card — the card is what makes a yellow pin reachable at all
+  // a click drops a pin and opens its card — the card is what makes a yellow pin reachable at all.
+  // 430 rather than 400: `#tabs` pushes the map down its own height, and 400 now lands on a marker
   log("step: click the map");
-  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: 700, y: 400, button: "left", buttons: 1, clickCount: 1 });
-  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 700, y: 400, button: "left", buttons: 0, clickCount: 1 });
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: 700, y: 430, button: "left", buttons: 1, clickCount: 1 });
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 700, y: 430, button: "left", buttons: 0, clickCount: 1 });
   await sleep(1500);
   const card = await evaluate(`(() => { const el = document.getElementById('report');
     return el && { text: el.innerText.slice(0, 160), acts: [...el.querySelectorAll('.acts button')].map(b => b.textContent.trim()) }; })()`);
@@ -180,6 +188,38 @@ async function main() {
   fs.rmSync(PINS);
   await load();
   await expectMarkers(141, "deleting the pin file restores what the study declares");
+
+  // the served path is one file, so the CLI opened one tab; the pool is the directory around it, and
+  // a study nobody asked for is built the first time a tab does
+  log("step: tabs");
+  assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand"], "the study the CLI was given is the one open tab");
+  assert.equal(await layers(), 8, "three live layers plus the study's five");
+
+  await press("t");
+  const offered = await evaluate("[...document.querySelectorAll('#picker li')].map(l => l.textContent)");
+  assert.equal(offered.length, 4, `the picker offers the whole directory: ${offered}`);
+  await evaluate(`[...document.querySelectorAll('#picker li')].find(l => l.textContent === 'cleaning_-_Clermont-Ferrand').click()`);
+  // the second study is evaluated on this request, which reads the grid archive again
+  for (let i = 0; i < 120; i++) {
+    if ((await tabs()).length === 2) break;
+    await sleep(1000);
+  }
+  assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand", "cleaning_-_Clermont-Ferrand"], "the picked study is a second tab");
+  assert.equal(await layers(), 10, "the cleaning study's seven layers are what the panel now offers");
+  assert(
+    (await evaluate("document.querySelector('#ctl .note').innerText")).includes("10446 cells"),
+    "the second study covers the same grid",
+  );
+
+  await press("[");
+  assert.equal(await layers(), 8, "`[` goes back to the detailing study");
+  await press("]");
+  assert.equal(await layers(), 10, "`]` comes forward again");
+
+  await press("w");
+  assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand"], "`w` closes the active tab");
+  assert.equal(await layers(), 8, "and the panel is the surviving study's");
+  await expectMarkers(141, "so is the map");
 
   assert.deepEqual(errors, [], "no uncaught exceptions");
   log("\nOK — all assertions passed");

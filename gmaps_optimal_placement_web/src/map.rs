@@ -6,18 +6,52 @@ use gmaps_optimal_placement_core::{
 	Model,
 	model::{Report, TierState, fmt, ramp},
 };
+pub use imp::{activate, close, open, persist_keys};
 use leptos::prelude::*;
 
-use crate::pins::Pin;
+use crate::{
+	pins::Pin,
+	tabs::{Keymap, Pool},
+};
 
 /// One per tier, in the study's own order. Sixth and beyond wrap.
 const TIER_COLORS: [&str; 5] = ["#ff2d55", "#00d0ff", "#ffb020", "#7ae77a", "#c78bff"];
+
+/// One study, as the controls stood when its tab was last left. `activate` swaps this against the
+/// live signals; the map instance underneath is never rebuilt.
+#[derive(Clone)]
+pub struct Tab {
+	/// The file stem, which is what `/payload/{stem}` is keyed by.
+	pub stem: String,
+	/// The payload's own name once it has landed, the stem until then.
+	pub label: String,
+	pub model: Option<Rc<Model>>,
+	pub lambda: f64,
+	pub layer: usize,
+	pub hide_imputed: bool,
+	pub tiers: Vec<TierState>,
+	pub core: Vec<Pin>,
+	pub temp: Vec<Pin>,
+	pub selected: Option<String>,
+}
 
 /// Everything the view reads and the effects write. Copy, so a closure captures it by value.
 #[derive(Clone, Copy)]
 pub struct State {
 	pub heavy: StoredValue<Heavy, LocalStorage>,
+	/// `Model` is an `Rc`, so the tabs cannot live in a `Send` signal.
+	pub tabs: RwSignal<Vec<Tab>, LocalStorage>,
+	pub active: RwSignal<usize>,
+	/// Every stem in the served directory, whether or not it has a tab.
+	pub available: RwSignal<Vec<String>>,
+	pub picker: RwSignal<Option<Pool>>,
+	pub settings: RwSignal<bool>,
+	pub keys: RwSignal<Keymap>,
+	/// Which binding the settings panel is waiting on. A clicked button does not take focus in every
+	/// browser, so the next keypress is read off the document rather than off the button.
+	pub arming: RwSignal<Option<&'static str>>,
 	pub lambda: RwSignal<f64>,
+	/// Global: how you look at a map, not a property of a study.
 	pub opacity: RwSignal<f64>,
 	pub layer: RwSignal<usize>,
 	pub hide_imputed: RwSignal<bool>,
@@ -45,6 +79,13 @@ impl State {
 	fn new() -> Self {
 		Self {
 			heavy: StoredValue::new_local(Heavy::default()),
+			tabs: RwSignal::new_local(Vec::new()),
+			active: RwSignal::new(0),
+			available: RwSignal::new(Vec::new()),
+			picker: RwSignal::new(None),
+			settings: RwSignal::new(false),
+			keys: RwSignal::new(Keymap::default()),
+			arming: RwSignal::new(None),
 			lambda: RwSignal::new(2000.),
 			opacity: RwSignal::new(0.62),
 			layer: RwSignal::new(0),
@@ -187,9 +228,9 @@ pub struct Heavy {
 	pub shown: Vec<u8>,
 }
 
+/// What the control panel shows for the active study. Rebuilt on every tab switch.
 #[derive(Clone, PartialEq)]
 pub struct Loaded {
-	pub study: String,
 	pub layers: Vec<(String, String)>,
 	pub tier_counts: Vec<usize>,
 	pub imputed: usize,
@@ -215,7 +256,10 @@ pub fn MapView() -> impl IntoView {
 	imp::wire(s);
 
 	view! {
+		<crate::tabs::TabBar state=s />
 		<div id="map"></div>
+		{move || s.picker.get().map(|pool| view! { <crate::tabs::Picker state=s pool=pool /> })}
+		{move || s.settings.get().then(|| view! { <crate::tabs::Settings state=s /> })}
 		{move || {
 			s.tip
 				.get()
@@ -241,7 +285,13 @@ pub fn MapView() -> impl IntoView {
 							l.layers
 								.into_iter()
 								.enumerate()
-								.map(|(i, (name, _))| view! { <option value=i.to_string()>{name}</option> })
+								.map(|(i, (name, _))| {
+									view! {
+										<option value=i.to_string() prop:selected=move || s.layer.get() == i>
+											{name}
+										</option>
+									}
+								})
 								.collect_view()
 						})
 				}}
@@ -296,7 +346,7 @@ pub fn MapView() -> impl IntoView {
 										<input
 											type="checkbox"
 											id=format!("tier{i}")
-											checked=true
+											prop:checked=move || s.tiers.with(|v| v.get(i).is_some_and(|t| t.show))
 											on:change=move |ev| {
 												s.tiers.update(|v| v[i].show = event_target_checked(&ev));
 											}
@@ -308,7 +358,14 @@ pub fn MapView() -> impl IntoView {
 									</div>
 									<label>
 										{format!("weight of one {} — ", t.name)}
-										<span>{move || s.tiers.with(|v| format!("{:.2}", v[i].weight))}</span>
+										<span>
+											{move || {
+												s.tiers
+													.with(|v| {
+														v.get(i).map_or_else(String::new, |t| format!("{:.2}", t.weight))
+													})
+											}}
+										</span>
 									</label>
 									<input
 										type="range"
@@ -332,6 +389,7 @@ pub fn MapView() -> impl IntoView {
 				<input
 					type="checkbox"
 					id="hideImp"
+					prop:checked=move || s.hide_imputed.get()
 					on:change=move |ev| s.hide_imputed.set(event_target_checked(&ev))
 				/>
 				<label for="hideImp">
@@ -404,8 +462,14 @@ fn gradient() -> String {
 
 #[cfg(not(feature = "hydrate"))]
 mod imp {
+	use super::State;
+
 	/// Server-side the island renders its empty shell; nothing recomputes until the wasm lands.
-	pub fn wire(_: super::State) {}
+	pub fn wire(_: State) {}
+	pub fn open(_: State, _: String) {}
+	pub fn activate(_: State, _: usize) {}
+	pub fn close(_: State, _: usize) {}
+	pub fn persist_keys(_: State) {}
 }
 
 #[cfg(feature = "hydrate")]
@@ -414,8 +478,8 @@ mod imp {
 	use leptos::prelude::*;
 	use wasm_bindgen::{closure::WasmClosure, prelude::*};
 
-	use super::{Legend, State, TIER_COLORS, Tip};
-	use crate::pins::Pin;
+	use super::{Legend, State, TIER_COLORS, Tab, Tip};
+	use crate::{pins::Pin, tabs::Pool};
 
 	/// One per tier, in the study's own order. Sixth and beyond wrap.
 	const GREEN: &str = "#7cff8f";
@@ -467,6 +531,8 @@ mod imp {
 		) -> JsValue;
 		#[wasm_bindgen(js_name = cells)]
 		fn cells_js(el: &web_sys::HtmlElement, ring_x: &[f64], ring_y: &[f64], colors: &[u8], shown: &[u8]);
+		#[wasm_bindgen(js_name = recenter)]
+		fn recenter_js(el: &web_sys::HtmlElement, lat: f64, lng: f64, zoom: u8);
 		#[wasm_bindgen(js_name = opacity)]
 		fn opacity_js(el: &web_sys::HtmlElement, v: f64);
 		#[wasm_bindgen(js_name = competitors)]
@@ -491,8 +557,11 @@ mod imp {
 			if ran.is_some() {
 				return;
 			}
-			leptos::task::spawn_local(async move { load(s).await });
+			leptos::task::spawn_local(async move { boot(s).await });
 		});
+
+		let on_key = leak(Closure::<dyn Fn(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| key(s, &ev)));
+		document().add_event_listener_with_callback("keydown", &on_key).expect("the document takes a keydown listener");
 
 		Effect::new(move |_| {
 			s.lambda.track();
@@ -556,34 +625,245 @@ mod imp {
 		});
 	}
 
-	async fn load(s: State) {
-		let payload = match gloo_net::http::Request::get("/payload.json").send().await {
-			Err(e) => return s.banner.set(Some(format!("⚠ the study never arrived — {e}"))),
-			Ok(r) if !r.ok() => return s.banner.set(Some(format!("⚠ the study never arrived — {}", r.status_text()))),
-			Ok(r) => match r.json::<gmaps_optimal_placement_core::Payload>().await {
-				Ok(p) => p,
-				Err(e) => return s.banner.set(Some(format!("⚠ the study did not parse — {e}"))),
-			},
+	/// What the directory holds and what the CLI already built.
+	#[derive(serde::Deserialize)]
+	struct Studies {
+		available: Vec<String>,
+		open: Vec<String>,
+	}
+
+	/// The directory, the saved keys, and a tab per study the CLI picked.
+	async fn boot(s: State) {
+		let dir = match get::<Studies>("/studies.json").await {
+			Ok(d) => d,
+			Err(e) => return s.banner.set(Some(format!("⚠ the directory never arrived — {e}"))),
+		};
+		s.available.set(dir.available);
+		match crate::tabs::load_keys().await {
+			Ok(Some(k)) => s.keys.set(k),
+			Ok(None) => {}
+			Err(e) => s.banner.set(Some(format!("⚠ keys — {e}"))),
+		}
+		for stem in dir.open {
+			add(s, stem).await;
+		}
+		adopt(s, 0);
+	}
+
+	/// Fetch a study, build its `Model`, and give it a tab. Mounts the map on the first one.
+	async fn add(s: State, stem: String) -> Option<usize> {
+		let url = format!("/payload/{}", js_sys::encode_uri_component(&stem));
+		let payload = match get::<gmaps_optimal_placement_core::Payload>(&url).await {
+			Ok(p) => p,
+			Err(e) => {
+				s.banner.set(Some(format!("⚠ {stem} — {e}")));
+				return None;
+			}
 		};
 		let model = match gmaps_optimal_placement_core::Model::try_new(payload) {
 			Ok(m) => std::rc::Rc::new(m),
-			Err(e) => return s.banner.set(Some(format!("⚠ {e}"))),
+			Err(e) => {
+				s.banner.set(Some(format!("⚠ {stem} — {e}")));
+				return None;
+			}
 		};
-
-		s.lambda.set(model.payload.lambda_m);
-		s.tiers.set(model.tier_states());
-		s.core.set(crate::pins::seed(&model.payload).await.unwrap_or_else(|e| {
+		let core = crate::pins::seed(&model.payload).await.unwrap_or_else(|e| {
 			s.banner.set(Some(format!("⚠ pins — {e}")));
 			Vec::new()
-		}));
-		s.loaded.set(Some(super::Loaded {
-			study: model.payload.name.clone(),
-			layers: model.layers().into_iter().map(|l| (l.name, l.note)).collect(),
-			tier_counts: model.payload.tiers.iter().map(|t| model.payload.pois.iter().filter(|p| p.poi.tier == t.name).count()).collect(),
-			imputed: model.payload.imputed.iter().filter(|&&i| i == 1).count(),
-		}));
+		});
+		let tab = Tab {
+			stem,
+			label: model.payload.name.clone(),
+			lambda: model.payload.lambda_m,
+			layer: 0,
+			hide_imputed: false,
+			tiers: model.tier_states(),
+			core,
+			temp: Vec::new(),
+			selected: None,
+			model: Some(model.clone()),
+		};
+		s.tabs.update(|v| v.push(tab));
+		if !s.mounted.get_untracked() && !mount(s, &model).await {
+			return None;
+		}
+		Some(s.tabs.with_untracked(Vec::len) - 1)
+	}
 
-		let comps: Vec<serde_json::Value> = model
+	/// The live signals, back into the tab they belong to.
+	fn stash(s: State) {
+		let i = s.active.get_untracked();
+		s.tabs.update(|v| {
+			let Some(t) = v.get_mut(i) else { return };
+			t.lambda = s.lambda.get_untracked();
+			t.layer = s.layer.get_untracked();
+			t.hide_imputed = s.hide_imputed.get_untracked();
+			t.tiers = s.tiers.get_untracked();
+			t.core = s.core.get_untracked();
+			t.temp = s.temp.get_untracked();
+			t.selected = s.selected.get_untracked();
+		});
+	}
+
+	/// A tab, into the live signals. `press` and `unmet` are never stored — they are functions of λ
+	/// and the tier weights, so `recompute` is all it takes to get them back.
+	fn adopt(s: State, i: usize) {
+		let Some(t) = s.tabs.with_untracked(|v| v.get(i).cloned()) else { return };
+		let Some(m) = t.model else { return };
+		s.active.set(i);
+		s.heavy.update_value(|h| h.model = Some(m.clone()));
+		s.lambda.set(t.lambda);
+		s.layer.set(t.layer);
+		s.hide_imputed.set(t.hide_imputed);
+		s.tiers.set(t.tiers);
+		s.core.set(t.core);
+		s.temp.set(t.temp);
+		s.report.set(None);
+		s.selected.set(t.selected);
+		s.loaded.set(Some(super::Loaded {
+			layers: m.layers().into_iter().map(|l| (l.name, l.note)).collect(),
+			tier_counts: m.payload.tiers.iter().map(|t| m.payload.pois.iter().filter(|p| p.poi.tier == t.name).count()).collect(),
+			imputed: m.payload.imputed.iter().filter(|&&i| i == 1).count(),
+		}));
+		recompute(s);
+		document().set_title(&m.payload.name);
+		if let Some(el) = host().filter(|_| s.mounted.get_untracked()) {
+			competitors_js(&el, &competitors(&m));
+			recenter_js(&el, m.payload.center[0], m.payload.center[1], m.payload.zoom);
+		}
+	}
+
+	pub fn activate(s: State, i: usize) {
+		if i == s.active.get_untracked() {
+			return;
+		}
+		stash(s);
+		adopt(s, i);
+	}
+
+	/// An already-open study is switched to rather than fetched twice.
+	pub fn open(s: State, stem: String) {
+		leptos::task::spawn_local(async move {
+			if let Some(i) = s.tabs.with_untracked(|v| v.iter().position(|t| t.stem == stem)) {
+				return activate(s, i);
+			}
+			stash(s);
+			if let Some(i) = add(s, stem).await {
+				adopt(s, i);
+			}
+		});
+	}
+
+	pub fn close(s: State, i: usize) {
+		let active = s.active.get_untracked();
+		// the tab being closed is discarded, so only a different one is worth writing back
+		if i != active {
+			stash(s);
+		}
+		s.tabs.update(|v| {
+			v.remove(i);
+		});
+		let left = s.tabs.with_untracked(Vec::len);
+		if left == 0 {
+			return blank(s);
+		}
+		let next = if i < active { active - 1 } else { active.min(left - 1) };
+		s.active.set(usize::MAX); // `adopt` is unconditional; `activate` would see `next` as current
+		adopt(s, next);
+	}
+
+	/// No tabs: the panel, the report and the map all say so.
+	fn blank(s: State) {
+		s.active.set(0);
+		s.heavy.update_value(|h| h.model = None);
+		s.loaded.set(None);
+		s.legend.set(None);
+		s.report.set(None);
+		s.selected.set(None);
+		s.core.set(Vec::new());
+		s.temp.set(Vec::new());
+		s.tiers.set(Vec::new());
+		document().set_title("studies");
+		if let Some(el) = host().filter(|_| s.mounted.get_untracked()) {
+			cells_js(&el, &[], &[], &[], &[]);
+			competitors_js(&el, "[]");
+		}
+	}
+
+	pub fn persist_keys(s: State) {
+		let keys = s.keys.get_untracked();
+		leptos::task::spawn_local(async move {
+			if let Err(e) = crate::tabs::save_keys(keys).await {
+				s.banner.set(Some(format!("⚠ the key file was not written — {e}")));
+			}
+		});
+	}
+
+	/// Digits jump by position; everything else is looked up in the keymap. A modifier or a text
+	/// input means the key was not meant for the map.
+	fn key(s: State, ev: &web_sys::KeyboardEvent) {
+		if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
+			return;
+		}
+		let k = ev.key();
+		if k == "Escape" {
+			s.arming.set(None);
+			s.picker.set(None);
+			s.settings.set(false);
+			return;
+		}
+		if s.settings.get_untracked() {
+			// a rebind takes one character; anything else leaves the row armed
+			if let Some(label) = s.arming.get_untracked().filter(|_| k.chars().count() == 1) {
+				ev.prevent_default();
+				s.arming.set(None);
+				s.keys.update(|m| m.set(label, k));
+				persist_keys(s);
+			}
+			return;
+		}
+		if s.picker.get_untracked().is_some() {
+			return;
+		}
+		if ev
+			.target()
+			.and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+			.is_some_and(|t| matches!(t.tag_name().as_str(), "INPUT" | "SELECT" | "TEXTAREA"))
+		{
+			return;
+		}
+		let n = s.tabs.with_untracked(Vec::len);
+		if let Ok(d) = k.parse::<usize>() {
+			let i = if d == 0 { n.checked_sub(1) } else { (d <= n).then(|| d - 1) };
+			if let Some(i) = i {
+				activate(s, i);
+			}
+			return;
+		}
+		let m = s.keys.get_untracked();
+		let at = s.active.get_untracked();
+		match k {
+			_ if k == m.open => s.picker.set(Some(Pool::All)),
+			_ if k == m.find => s.picker.set(Some(Pool::Open)),
+			_ if n == 0 => {}
+			_ if k == m.prev => activate(s, (at + n - 1) % n),
+			_ if k == m.next => activate(s, (at + 1) % n),
+			_ if k == m.close => close(s, at),
+			_ => {}
+		}
+	}
+
+	async fn get<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, String> {
+		match gloo_net::http::Request::get(url).send().await {
+			Err(e) => Err(e.to_string()),
+			Ok(r) if !r.ok() => Err(r.text().await.unwrap_or_else(|_| r.status_text())),
+			Ok(r) => r.json::<T>().await.map_err(|e| format!("it did not parse — {e}")),
+		}
+	}
+
+	/// The whole competitor inventory, as `map_core.js` wants it.
+	fn competitors(model: &gmaps_optimal_placement_core::Model) -> String {
+		let out: Vec<serde_json::Value> = model
 			.payload
 			.pois
 			.iter()
@@ -603,13 +883,15 @@ mod imp {
 				})
 			})
 			.collect();
+		serde_json::to_string(&out).expect("a Vec<Value> serialises")
+	}
 
-		let (center, zoom) = (model.payload.center, model.payload.zoom);
-		s.heavy.update_value(|h| h.model = Some(model));
-		recompute(s);
-
+	/// The one `google.maps` instance, on the first study to arrive. Its callbacks read the live
+	/// signals, so they outlive every tab switch.
+	async fn mount(s: State, model: &gmaps_optimal_placement_core::Model) -> bool {
 		let Some(el) = host() else {
-			return s.banner.set(Some("⚠ the map host element is missing".to_owned()));
+			s.banner.set(Some("⚠ the map host element is missing".to_owned()));
+			return false;
 		};
 		let on_click = leak(Closure::<dyn Fn(f64, f64)>::new(move |lat: f64, lng: f64| {
 			let id = s.fresh_id();
@@ -636,10 +918,12 @@ mod imp {
 		let on_out = leak(Closure::<dyn Fn()>::new(move || s.tip.set(None)));
 		let on_pin = leak(Closure::<dyn Fn(String)>::new(move |id: String| s.open(&id)));
 
-		if let Some(msg) = mount_js(el.clone(), center[0], center[1], zoom, &on_click, &on_move, &on_out, &on_pin).await.as_string() {
-			return s.banner.set(Some(msg));
+		let (c, zoom) = (model.payload.center, model.payload.zoom);
+		if let Some(msg) = mount_js(el, c[0], c[1], zoom, &on_click, &on_move, &on_out, &on_pin).await.as_string() {
+			s.banner.set(Some(msg));
+			return false;
 		}
-		competitors_js(&el, &serde_json::to_string(&comps).expect("a Vec<Value> serialises"));
 		s.mounted.set(true);
+		true
 	}
 }

@@ -1,4 +1,4 @@
-let clermont = import ./_Clermont-Ferrand.nix; in
+let clermont = import ../_Clermont-Ferrand.nix; in
 {
   name = "car_detailing_-_Clermont-Ferrand";
 

@@ -12,7 +12,7 @@ use gmaps_optimal_placement_sources::Work;
 #[test]
 fn clermont_centre() {
 	let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("crate lives in the workspace");
-	let mut study: Study = gmaps_optimal_placement::load(&root.join("examples/car_detailing_-_Clermont-Ferrand.nix")).unwrap();
+	let mut study: Study = gmaps_optimal_placement::load(&root.join("examples/studies/car_detailing_-_Clermont-Ferrand.nix")).unwrap();
 	study.area = Area {
 		bbox: Bbox {
 			lat: [45.770, 45.790],

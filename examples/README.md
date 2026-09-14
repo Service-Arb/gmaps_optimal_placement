@@ -1,22 +1,24 @@
 # Worked studies
 
-There is no code here. One file per `<trade>_-_<city>`, and leading-underscore files it pulls in with
-`import`: one per country for what the statistics office publishes, one per city for the frame.
+There is no code here. `studies/` holds one file per `<trade>_-_<city>` and nothing else; beside it
+are the leading-underscore files they pull in with `import`: one per country for what the statistics
+office publishes, one per city for the frame.
 
 ```
                       _France.nix                grid, nv, the raw INSEE layers, the volume provider
                    ^               ^
        _Clermont-Ferrand.nix     _Lyon.nix       bbox, and the place volume resolves against
         ^        ^        ^          ^
-car_detailing_  plumbing_  cleaning_-_Clermont-Ferrand.nix
-                           cleaning_-_Lyon.nix
+studies/  car_detailing_  plumbing_  cleaning_-_Clermont-Ferrand.nix
+                                     cleaning_-_Lyon.nix
    poi / column / model / rank / searches.group are the trade
 ```
 
 ```fish
-nix run .#open examples/plumbing_-_Clermont-Ferrand.nix   # serve the map
-nix run .#searches examples/plumbing_-_Clermont-Ferrand.nix   # monthly volume per query group
-nix run .#study                                           # the detailing map, asserted in headless Chromium
+nix run .#open                                      # pick studies out of studies/ with fzf, one tab each
+nix run .#open examples/studies/plumbing_-_Clermont-Ferrand.nix   # or name one
+nix run .#searches examples/studies                 # pick one; monthly volume per query group
+nix run .#study                                     # the detailing map, asserted in headless Chromium
 ```
 
 ## What the map gives you

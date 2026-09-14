@@ -55,6 +55,17 @@ export function cells(el, ringX, ringY, colors, shown) {
 	paint(el, s);
 }
 
+/// Where a tab switch puts the viewport: the new study's own frame. A move to where the map already
+/// is starts a gesture that swallows the next click, so it is not made.
+export function recenter(el, lat, lng, zoom) {
+	const s = S.get(el);
+	if (!s) return;
+	const c = s.map.getCenter();
+	if (s.map.getZoom() === zoom && c && Math.abs(c.lat() - lat) < 1e-9 && Math.abs(c.lng() - lng) < 1e-9) return;
+	s.map.setCenter({ lat, lng });
+	s.map.setZoom(zoom);
+}
+
 export function opacity(el, v) {
 	const s = S.get(el);
 	if (!s) return;

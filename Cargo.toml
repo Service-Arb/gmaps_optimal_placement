@@ -56,11 +56,11 @@ gloo-net = { version = "=0.6.0", features = ["http"] }
 js-sys = "=0.3.103"
 leptos = { version = "=0.8.20", features = ["islands"] }
 leptos_axum = "=0.8.10"
-tokio = { version = "=1.53.1", features = ["rt-multi-thread", "net"] }
+tokio = { version = "=1.53.1", features = ["net", "rt-multi-thread", "sync"] }
 tower-http = { version = "=0.7.0", features = ["fs", "compression-gzip"] }
 wasm-bindgen = "=0.2.126" #NB: version must match that of wasm-bindgen-cli (pinned in flake.nix)
 wasm-bindgen-futures = "=0.4.76"
-web-sys = { version = "=0.3.103", features = ["Clipboard", "CssStyleDeclaration", "Document", "DomRect", "Element", "HtmlElement", "Navigator", "Window"] }
+web-sys = { version = "=0.3.103", features = ["Clipboard", "CssStyleDeclaration", "Document", "DomRect", "Element", "EventTarget", "HtmlElement", "KeyboardEvent", "Navigator", "Window"] }
 xdg = "=3.0.0"
 
 [profile.wasm-release]

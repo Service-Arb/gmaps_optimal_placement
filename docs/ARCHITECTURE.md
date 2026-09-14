@@ -36,12 +36,16 @@ document, never to the code.
    ┌───────┴──────────────────────────┐   ┌────────┴──────────────────────┐
    │ gmaps_optimal_placement          │   │ gmaps_optimal_placement_web   │
    │   CLI, study, HTML               │──▶│   ssr: axum + server fns      │
-   └──────────────────────────────────┘   │   hydrate: the MapView island │
-                                          │   map_core.js: google.maps    │
+   │   fzf over a directory of them   │   │   hydrate: the MapView island │
+   └──────────────────────────────────┘   │   map_core.js: google.maps    │
                                           └────────┬──────────────────────┘
                                                    ▼
                                     a served map · one <name>-searches.html
 ```
+
+`serve` holds a directory rather than a study: the CLI builds what `fzf` picked, the server builds
+any other study in that directory the first time a tab asks for it, and the page keeps several open
+over one map instance.
 
 The map answers where the people are. It does not answer how many are looking for the thing, which
 is what `searches` is for: a cell can be dense, affluent and uncontested and still sit under a trade

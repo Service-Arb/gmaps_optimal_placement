@@ -25,7 +25,7 @@ pub const NAME: usize = 2;
 pub const PLACE: usize = 3;
 pub const DIST: usize = 4;
 
-/// `gmaps_optimal_placement fit examples/*_-_*.nix`, pooled over both Clermont studies: 200 orderings, of which the
+/// `gmaps_optimal_placement fit examples/studies/*.nix`, pooled over both Clermont studies: 200 orderings, of which the
 /// 96 the probe asked from a node are the only ones carrying distance. Regenerate, do not edit.
 pub const COEF: [f64; N] = [0.4536, 1.4674, 1.7023, -0.3212, -0.2838];
 

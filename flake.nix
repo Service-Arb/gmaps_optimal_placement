@@ -82,7 +82,7 @@
             # the smoke promotes and drops pins, so it gets a data dir of its own
             XDG_DATA_HOME="$(mktemp -d)"
             export XDG_DATA_HOME
-            cargo run -p gmaps_optimal_placement -- serve examples/car_detailing_-_Clermont-Ferrand.nix --port ${toString port} &
+            cargo run -p gmaps_optimal_placement -- serve examples/studies/car_detailing_-_Clermont-Ferrand.nix --port ${toString port} &
             server=$!
             trap 'kill $server 2>/dev/null || true; rm -rf "$XDG_DATA_HOME"' EXIT
             # the router only exists once the study is evaluated, which reads an 87 MB archive
@@ -93,25 +93,26 @@
             node examples/smoke.js "http://localhost:${toString port}/"
           '';
         };
-        # `open <study.nix>` — build the client, evaluate the study, serve it, open a browser at it.
+        # `open [<study.nix>|<dir>]` — build the client, pick the studies, serve them, open a browser.
         open = pkgs.writeShellApplication {
           name = "open-map";
-          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold psmisc xdg-utils nix wasm-bindgen-cli ];
+          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold psmisc xdg-utils nix fzf wasm-bindgen-cli ];
           text = ''
-            [ $# -eq 1 ] || { echo "usage: nix run .#open <study.nix>" >&2; exit 1; }
-            config="$(realpath "$1")"
+            [ $# -le 1 ] || { echo "usage: nix run .#open [<study.nix>|<dir>]" >&2; exit 1; }
+            if [ $# -eq 1 ]; then config="$(realpath "$1")"; else config=""; fi
             cd "$(git rev-parse --show-toplevel)"
+            config="''${config:-examples/studies}"
             ${client}
             fuser -k ${toString port}/tcp 2>/dev/null || true
             exec cargo run -p gmaps_optimal_placement -- serve "$config" --port ${toString port} --open
           '';
         };
-        # `searches <study.nix>` — build the volume chart, serve it, open it.
+        # `searches <study.nix|dir>` — build the volume chart, serve it, open it.
         searches = pkgs.writeShellApplication {
           name = "open-searches";
-          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold python3 psmisc xdg-utils nix ];
+          runtimeInputs = with pkgs; [ rust git pkg-config openssl mold python3 psmisc xdg-utils nix fzf ];
           text = ''
-            [ $# -eq 1 ] || { echo "usage: nix run .#searches <study.nix>" >&2; exit 1; }
+            [ $# -eq 1 ] || { echo "usage: nix run .#searches <study.nix|dir>" >&2; exit 1; }
             config="$(realpath "$1")"
             cd "$(git rev-parse --show-toplevel)"
             out="''${GMAPS_OPTIMAL_PLACEMENT_WORK:-tmp/geo}/out"
@@ -140,8 +141,10 @@
           name = "help";
           text = ''
             cat <<'EOF'
-            nix run .#open     <study.nix>  serve the map on :${toString port} and open it (Ctrl-C to stop)
-            nix run .#searches <study.nix>  open the monthly search-volume chart for the study's query groups
+            nix run .#open  [<study.nix>|<dir>]  serve the map on :${toString port} and open it (Ctrl-C to stop).
+                                            a directory (default examples/studies) is picked through fzf,
+                                            multi-select, and each pick is a tab over one map
+            nix run .#searches <study.nix|dir>  open the monthly search-volume chart for the study's query groups
             nix run .#misc <country> <tally>  which towns in a country to write a study about at all:
                                             pool | building | parcel per --per column, --floor to skip hamlets
             nix run .#study                 serve the Clermont map and assert it in headless Chromium
@@ -227,6 +230,7 @@
             packages = [
               binaryen
               chromium
+              fzf
               mold
               nodejs
               openssl

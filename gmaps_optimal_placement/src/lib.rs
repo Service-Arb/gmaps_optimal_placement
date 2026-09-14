@@ -5,7 +5,7 @@ pub mod config;
 pub mod fit;
 pub mod render;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use eyre::{Result, WrapErr, bail, ensure};
 pub use gmaps_optimal_placement_core as core;
@@ -273,6 +273,54 @@ pub fn fold(group: &Group, ideas: Vec<Keyword>) -> Result<(Vec<String>, GroupOut
 		},
 	))
 }
+/// Every `*.nix` directly under `dir`, in file-stem order.
+pub fn studies(dir: &Path) -> Result<Vec<PathBuf>> {
+	let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
+		.wrap_err_with(|| format!("reading {}", dir.display()))?
+		.map(|e| Ok(e?.path()))
+		.collect::<Result<Vec<_>>>()?
+		.into_iter()
+		.filter(|p| p.extension().is_some_and(|e| e == "nix"))
+		.collect();
+	out.sort_by_key(|p| p.file_stem().expect("a *.nix path has a stem").to_owned());
+	Ok(out)
+}
+
+/// Studies to work on. A directory is offered through `fzf`; a file is itself, so a scripted run
+/// never opens a picker.
+pub fn pick(path: &Path, multi: bool) -> Result<Vec<PathBuf>> {
+	if path.is_file() {
+		return Ok(vec![path.to_owned()]);
+	}
+	let found = studies(path)?;
+	ensure!(!found.is_empty(), "no study under {}", path.display());
+	let stems: Vec<&str> = found.iter().map(|p| p.file_stem().and_then(|s| s.to_str()).expect("a study path is UTF-8")).collect();
+
+	let mut fzf = std::process::Command::new("fzf")
+		.args(multi.then_some("--multi"))
+		.stdin(std::process::Stdio::piped())
+		.stdout(std::process::Stdio::piped())
+		.spawn()
+		.wrap_err("spawning `fzf` — choosing among a directory of studies needs it on PATH")?;
+	let mut sink = fzf.stdin.take().expect("stdin is piped");
+	std::io::Write::write_all(&mut sink, stems.join("\n").as_bytes())?;
+	drop(sink);
+	let out = fzf.wait_with_output()?;
+
+	let picked: Vec<&str> = std::str::from_utf8(&out.stdout)?.lines().collect();
+	ensure!(!picked.is_empty(), "nothing picked out of {}", path.display());
+	picked
+		.into_iter()
+		.map(|s| {
+			let i = stems
+				.iter()
+				.position(|o| *o == s)
+				.ok_or_else(|| eyre::eyre!("fzf returned {s:?}, which is not a study under {}", path.display()))?;
+			Ok(found[i].clone())
+		})
+		.collect()
+}
+
 pub fn load(path: &Path) -> Result<Study> {
 	let out = std::process::Command::new("nix")
 		.args(["eval", "--json", "--file"])

@@ -13,8 +13,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-	/// Where the people are: demand under the competitors, as a map served from here
+	/// Where the people are: demand under the competitors, as a map served from here. A directory is
+	/// offered through `fzf`, and whatever is picked opens as a tab over one map
 	Serve {
+		#[arg(default_value = "examples/studies")]
 		config: PathBuf,
 		#[arg(short, long, default_value_t = 8731)]
 		port: u16,
@@ -73,16 +75,38 @@ fn main() -> Result<()> {
 			Ok(())
 		}
 		Cmd::Serve { config, port, open } => {
-			let payload = gmaps_optimal_placement::load(&config)?.build(&work)?;
-			report(gmaps_optimal_placement::stats(&payload));
-			gmaps_optimal_placement_web::serve::serve(payload, SocketAddr::from(([127, 0, 0, 1], port)), open)
+			// eagerly, and here rather than in the server: a study that will not build must fail before
+			// the listener binds, and each one's statistics still print
+			let prebuilt = gmaps_optimal_placement::pick(&config, true)?
+				.iter()
+				.map(|p| {
+					let payload = gmaps_optimal_placement::load(p)?.build(&work)?;
+					report(gmaps_optimal_placement::stats(&payload));
+					Ok((stem(p), serde_json::to_string(&payload)?))
+				})
+				.collect::<Result<Vec<_>>>()?;
+			let dir = if config.is_dir() { config } else { config.parent().unwrap_or(&config).to_owned() };
+			// the work dir rather than `work` itself: `Work` holds a `Cell`, and the server calls this
+			// from whichever blocking thread a tab's first request landed on
+			let at = work.path().to_owned();
+			let build = std::sync::Arc::new(move |p: &std::path::Path| {
+				let payload = gmaps_optimal_placement::load(p)?.build(&Work::at(at.clone()))?;
+				Ok(serde_json::to_string(&payload)?)
+			});
+			gmaps_optimal_placement_web::serve::serve(dir, prebuilt, build, SocketAddr::from(([127, 0, 0, 1], port)), open)
 		}
 		Cmd::Probe { config, dry_run } => {
-			gmaps_optimal_placement::load(&config)?.probe(&work, dry_run)?;
+			gmaps_optimal_placement::load(&one(&config)?)?.probe(&work, dry_run)?;
 			Ok(())
 		}
 		Cmd::Fit { config } => {
-			let studies = config.iter().map(|c| gmaps_optimal_placement::load(c)).collect::<Result<Vec<_>>>()?;
+			// no picker: how Google ranks is one mechanism, so a directory contributes every ordering in it
+			let paths = config
+				.iter()
+				.map(|p| if p.is_dir() { gmaps_optimal_placement::studies(p) } else { Ok(vec![p.clone()]) })
+				.collect::<Result<Vec<_>>>()?
+				.concat();
+			let studies = paths.iter().map(|c| gmaps_optimal_placement::load(c)).collect::<Result<Vec<_>>>()?;
 			let lambda: Vec<f64> = studies.iter().map(|s| s.model.lambda_m).collect();
 			let fit: gmaps_optimal_placement::fit::Fit = studies.iter().map(|s| s.observations(&work)).collect::<Result<Vec<_>>>()?.into_iter().collect();
 			report(fit.stats(&lambda));
@@ -94,12 +118,25 @@ fn main() -> Result<()> {
 			write(out.unwrap_or_else(|| work.path().join("out").join(format!("{}.html", compiled.name()))), &compiled.render()?)
 		}
 		Cmd::Searches { config, out } => {
-			let payload = gmaps_optimal_placement::load(&config)?.searches(&work)?;
+			let payload = gmaps_optimal_placement::load(&one(&config)?)?.searches(&work)?;
 			report(gmaps_optimal_placement::search_stats(&payload));
 			let html = gmaps_optimal_placement::render::render_searches(&payload)?;
 			write(out.unwrap_or_else(|| work.path().join("out").join(format!("{}-searches.html", payload.name))), &html)
 		}
 	}
+}
+
+/// The one study a subcommand that produces a single artifact works on.
+fn one(config: &std::path::Path) -> Result<PathBuf> {
+	let picked = gmaps_optimal_placement::pick(config, false)?;
+	let [path] = picked.as_slice() else {
+		eyre::bail!("expected one study, got {}", picked.len())
+	};
+	Ok(path.clone())
+}
+
+fn stem(p: &std::path::Path) -> String {
+	p.file_stem().expect("a study path has a stem").to_string_lossy().into_owned()
 }
 
 fn write(out: PathBuf, html: &str) -> Result<()> {
