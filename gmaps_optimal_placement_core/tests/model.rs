@@ -1,6 +1,6 @@
 //! The numbers the map used to compute in the browser, pinned against the Clermont study.
 //!
-//! `clermont_payload.json` is one `gmaps_optimal_placement map examples/studies/car_detailing_-_Clermont-Ferrand.nix` — the
+//! `clermont_payload.json` is one `car_detailing.nix` x `Clermont-Ferrand.nix` build — the
 //! billed half of the pipeline, frozen, so this runs with no network and no key.
 use gmaps_optimal_placement_core::{
 	Model, Payload,

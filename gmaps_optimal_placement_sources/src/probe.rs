@@ -9,7 +9,7 @@
 use eyre::{Result, WrapErr};
 
 use crate::{
-	poi::{self, Ranking, Region, SEARCH_TEXT},
+	poi::{self, Ranking, Region},
 	work::Work,
 };
 
@@ -48,7 +48,7 @@ pub fn run(work: &Work, plan: Vec<(Ranking, serde_json::Value)>) -> Result<Vec<R
 	let key = std::env::var("GOOGLE_MAPS_KEY").wrap_err("GOOGLE_MAPS_KEY is not set")?;
 	plan.into_iter()
 		.map(|(mut r, body)| {
-			r.ids = poi::search_text(work, &key, &body, MASK, PAGES)?.into_iter().map(|(id, _)| id).collect();
+			r.ids = poi::search_text(work, Some(&key), &body, MASK, PAGES)?.into_iter().map(|(id, _)| id).collect();
 			Ok(r)
 		})
 		.collect()
@@ -59,19 +59,7 @@ pub fn run(work: &Work, plan: Vec<(Ranking, serde_json::Value)>) -> Result<Vec<R
 pub fn cached(work: &Work, plan: &[(Ranking, serde_json::Value)]) -> Result<Vec<Ranking>> {
 	let mut out = Vec::new();
 	for (r, body) in plan {
-		let mut ids = Vec::new();
-		let mut body = body.clone();
-		for _ in 0..PAGES {
-			let Some(res) = work.cached(SEARCH_TEXT, &body)? else { break };
-			for p in res["places"].as_array().into_iter().flatten() {
-				let id = p["id"].as_str().ok_or_else(|| eyre::eyre!("cached probe response has a result without an id: {p}"))?;
-				ids.push(id.to_owned());
-			}
-			match res["nextPageToken"].as_str() {
-				Some(t) => body["pageToken"] = serde_json::Value::String(t.to_owned()),
-				None => break,
-			}
-		}
+		let ids: Vec<String> = poi::search_text(work, None, body, MASK, PAGES)?.into_iter().map(|(id, _)| id).collect();
 		if !ids.is_empty() {
 			out.push(Ranking { ids, ..r.clone() });
 		}

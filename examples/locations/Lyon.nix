@@ -1,6 +1,6 @@
-/* What every Lyon study shares regardless of trade: the frame, and the location Google resolves
-   search volume against. The rest is [_France.nix]. */
-let france = import ./_France.nix; in
+/* What every Lyon study shares regardless of trade: the frame, the location Google resolves search
+   volume against, and the premises worth asking about. The rest is [../_France.nix]. */
+let france = import ../_France.nix; in
 france
   // {
   area = {
@@ -13,4 +13,7 @@ france
   };
 
   searches = france.searches // { place = "Lyon,Auvergne-Rhone-Alpes,France"; };
+
+  # A premises, not a business: whichever trade moves into it, it is the same unit on the same street.
+  candidate = [ ];
 }

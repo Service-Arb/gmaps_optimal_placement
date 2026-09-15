@@ -1,5 +1,10 @@
 //! The study document. Not settings: there is no sane environment-variable spelling of `[[layer]]`,
 //! so it is plain `Deserialize` from a path, with a JSON schema for the editor.
+//!
+//! A study is not one file. It is a trade applied to a location — `import trades/cleaning.nix
+//! (import locations/Lyon.nix)` — because the two vary independently. What the location decides is
+//! the frame, the statistics office behind it, and the addresses being considered; everything else
+//! is the trade. Nothing here may need both: see the invariant in `docs/ARCHITECTURE.md`.
 use gmaps_optimal_placement_core::grid::Bbox;
 pub use gmaps_optimal_placement_core::payload::{Candidate, Scale};
 use gmaps_optimal_placement_sources::{GridSource, PoiConfig};
@@ -9,6 +14,9 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Study {
+	/// `<trade>_-_<location>`, from the two file stems. Not written down anywhere: it names a pairing
+	/// the CLI made, and it is what the pin file and the searches chart are keyed by.
+	#[serde(skip)]
 	pub name: String,
 	pub area: Area,
 	pub grid: GridSpec,
@@ -27,7 +35,8 @@ pub struct Study {
 	#[serde(default)]
 	pub searches: Option<Searches>,
 	/// Addresses the study is actually about. The usual question is "is *this* one good", not only
-	/// "where is best".
+	/// "where is best". A premises is a location's, not a trade's: the same unit is worth asking
+	/// about for whichever trade would move into it.
 	#[serde(default, rename = "candidate")]
 	pub candidates: Vec<Candidate>,
 }
@@ -63,10 +72,9 @@ pub struct Model {
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RankSpec {
-	/// Power of two — a k-d split to depth log2(n), one equal share of demand per stratum.
+	/// Power of two — a k-d split to depth log2(n), one equal share of demand per stratum. The
+	/// `locationBias` circle the probe asks from is a stratum's worth of ground, so this sets it too.
 	pub nodes: usize,
-	/// The `locationBias` circle, metres.
-	pub radius_m: f64,
 	/// Deliberately not `poi.queries`: those are tuned to *find* competitors, which biases them
 	/// toward words already in the shop names. The name coefficient is identified by businesses that
 	/// were close and did not appear, so this set must contain terms the names do not.

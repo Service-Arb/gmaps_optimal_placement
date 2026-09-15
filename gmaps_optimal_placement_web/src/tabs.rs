@@ -5,13 +5,16 @@
 //! reads the next one into them; there is never a second `google.maps` instance.
 //!
 //! ```text
-//!   GET /studies.json   available: every stem in the directory
-//!                       open:      the one the CLI was named, if it was named one
+//!   GET /studies.json   trades, locations: the two axes the CLI was given
+//!                       open:              the pairing it was named, if it was named one
 //!        │
-//!   ┌────┴──── t ─→ Pool::All   filter the directory, open a new tab
-//!   │  Picker                   ↑ also where a served directory starts
-//!   └───────── f ─→ Pool::Open  filter the open tabs, switch to one
+//!   ┌────┴──── t ─→ Pool::Trade ─→ Pool::Location(trade)   pick what, then where; open a tab
+//!   │  Picker                      ↑ also where a served product starts
+//!   └───────── f ─→ Pool::Open     filter the open tabs, switch to one
 //! ```
+//!
+//! Two steps rather than one list of every pairing: a study is a point on a product, and an
+//! agglomeration times a trade list is a long list to read when what you know is one coordinate.
 //!
 //! This is the only picker: `serve` does not run `fzf` over a directory, because choosing the first
 //! study and choosing the fourth should not be two different motions.
@@ -27,10 +30,12 @@ use serde::{Deserialize, Serialize};
 use crate::map::State;
 
 /// Which set the picker is filtering.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Pool {
-	/// Every study in the directory; picking one opens a tab.
-	All,
+	/// Every trade served; picking one asks for its city next.
+	Trade,
+	/// Every location served, for the trade already chosen. Picking one opens a tab.
+	Location(String),
 	/// The open tabs; picking one switches to it.
 	Open,
 }
@@ -141,7 +146,7 @@ pub fn TabBar(state: State) -> impl IntoView {
 			<span
 				class="tab add"
 				title="open a study"
-				on:click=move |_| state.picker.set(Some(Pool::All))
+				on:click=move |_| state.picker.set(Some(Pool::Trade))
 			>
 				"+"
 			</span>
@@ -166,21 +171,24 @@ pub fn TabBar(state: State) -> impl IntoView {
 pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 	let query = RwSignal::new(String::new());
 	let sel = RwSignal::new(0usize);
-	let hits = Memo::new(move |_| {
-		let q = query.get();
-		let all: Vec<(usize, String)> = match pool {
-			Pool::All => state.available.get().into_iter().enumerate().collect(),
-			Pool::Open => state.tabs.get().into_iter().enumerate().map(|(i, t)| (i, t.label)).collect(),
-		};
-		all.into_iter().filter(|(_, s)| subsequence(&q, s)).collect::<Vec<_>>()
-	});
-	let take = move |i: usize, name: String| {
-		state.picker.set(None);
-		match pool {
-			Pool::All => crate::map::open(state, name),
-			Pool::Open => crate::map::activate(state, i),
-		}
+	let hits = {
+		let pool = pool.clone();
+		Memo::new(move |_| {
+			let q = query.get();
+			let all: Vec<(usize, String)> = match &pool {
+				Pool::Trade => state.trades.get().into_iter().enumerate().collect(),
+				Pool::Location(_) => state.locations.get().into_iter().enumerate().collect(),
+				Pool::Open => state.tabs.get().into_iter().enumerate().map(|(i, t)| (i, t.label)).collect(),
+			};
+			all.into_iter().filter(|(_, s)| subsequence(&q, s)).collect::<Vec<_>>()
+		})
 	};
+	let prompt = match &pool {
+		Pool::Trade => "what is being sold".to_owned(),
+		Pool::Location(trade) => format!("{trade} — and where"),
+		Pool::Open => "find an open tab".to_owned(),
+	};
+	let (on_enter, on_row) = (pool.clone(), pool.clone());
 	let field = NodeRef::<leptos::html::Input>::new();
 	// the overlay is modal, so the keys below are only ever the picker's
 	Effect::new(move |_| {
@@ -196,10 +204,7 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 			<input
 				type="text"
 				node_ref=field
-				placeholder=match pool {
-					Pool::All => "open a study",
-					Pool::Open => "find an open tab",
-				}
+				placeholder=prompt
 				prop:value=move || query.get()
 				on:input=move |ev| {
 					query.set(event_target_value(&ev));
@@ -226,24 +231,25 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 					if ev.key() == "Enter" {
 						ev.prevent_default();
 						if let Some((i, name)) = hits.with(|h| h.get(sel.get_untracked()).cloned()) {
-							take(i, name);
+							take(state, &on_enter, i, name);
 						}
 					}
 				}
 			/>
 			<ul>
 				{move || {
+					let pool = on_row.clone();
 					hits
 						.get()
 						.into_iter()
 						.enumerate()
 						.map(|(row, (i, name))| {
-							let pick = name.clone();
+							let (pool, pick) = (pool.clone(), name.clone());
 							view! {
 								<li
 									class:on=move || sel.get() == row
 									on:mouseenter=move |_| sel.set(row)
-									on:click=move |_| take(i, pick.clone())
+									on:click=move |_| take(state, &pool, i, pick.clone())
 								>
 									{name}
 								</li>
@@ -253,6 +259,22 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 				}}
 			</ul>
 		</div>
+	}
+}
+
+/// What picking the highlighted row does. The trade step does not open anything — it narrows the
+/// picker to that trade's cities and stays up.
+fn take(state: State, pool: &Pool, i: usize, name: String) {
+	match pool {
+		Pool::Trade => state.picker.set(Some(Pool::Location(name))),
+		Pool::Location(trade) => {
+			state.picker.set(None);
+			crate::map::open(state, trade.clone(), name);
+		}
+		Pool::Open => {
+			state.picker.set(None);
+			crate::map::activate(state, i);
+		}
 	}
 }
 

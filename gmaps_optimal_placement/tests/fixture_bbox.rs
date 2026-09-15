@@ -12,7 +12,8 @@ use gmaps_optimal_placement_sources::Work;
 #[test]
 fn clermont_centre() {
 	let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("crate lives in the workspace");
-	let mut study: Study = gmaps_optimal_placement::load(&root.join("examples/studies/car_detailing_-_Clermont-Ferrand.nix")).unwrap();
+	let mut study: Study = gmaps_optimal_placement::load(&root.join("examples/trades/car_detailing.nix"), &root.join("examples/locations/Clermont-Ferrand.nix")).unwrap();
+	assert_eq!(study.name, "car_detailing_-_Clermont-Ferrand", "the pairing names itself off the two stems");
 	study.area = Area {
 		bbox: Bbox {
 			lat: [45.770, 45.790],
@@ -39,6 +40,7 @@ fn clermont_centre() {
 	Households      29006.8
 	Standard of living (€/yr) 5571857.5
 	Households in houses 3466.1
+	Households in flats 25540.7
 	Estimated cars  27082.0
 	");
 }

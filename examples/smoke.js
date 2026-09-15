@@ -118,7 +118,7 @@ async function main() {
   log("state:", s);
 
   assert.equal(s.banner, null, "no banner");
-  assert.equal(s.layers, 8, "three live layers plus the study's five");
+  assert.equal(s.layers, 9, "three live layers plus the study's six");
   assert.equal(s.tierRows, 3, "one row per tier, plus hide-imputed");
   assert(s.note.includes("10446 cells"), `legend counts the grid: ${s.note}`);
   assert(s.painted > 100, "canvas actually painted");
@@ -189,36 +189,39 @@ async function main() {
   await load();
   await expectMarkers(141, "deleting the pin file restores what the study declares");
 
-  // the served path is one file, so the CLI opened one tab; the pool is the directory around it, and
-  // a study nobody asked for is built the first time a tab does
+  // the CLI was given one trade and one location, so it opened one tab; the pool is their whole
+  // product, and a pairing nobody asked for is built the first time a tab does
   log("step: tabs");
-  assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand"], "the study the CLI was given is the one open tab");
-  assert.equal(await layers(), 8, "three live layers plus the study's five");
+  assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand"], "the pairing the CLI was given is the one open tab");
+  assert.equal(await layers(), 9, "three live layers plus the study's six");
 
+  const rows = () => evaluate("[...document.querySelectorAll('#picker li')].map(l => l.textContent)");
+  const pick = name => evaluate(`[...document.querySelectorAll('#picker li')].find(l => l.textContent === '${name}').click()`);
   await press("t");
-  const offered = await evaluate("[...document.querySelectorAll('#picker li')].map(l => l.textContent)");
-  assert.equal(offered.length, 4, `the picker offers the whole directory: ${offered}`);
-  await evaluate(`[...document.querySelectorAll('#picker li')].find(l => l.textContent === 'cleaning_-_Clermont-Ferrand').click()`);
-  // the second study is evaluated on this request, which reads the grid archive again
+  assert.deepEqual(await rows(), ["car_detailing", "cleaning", "plumbing"], "the picker's first step is the trades");
+  await pick("cleaning");
+  assert.deepEqual(await rows(), ["Clermont-Ferrand", "Lyon"], "picking a trade narrows it to the locations");
+  await pick("Clermont-Ferrand");
+  // the second pairing is evaluated on this request, which reads the grid archive again
   for (let i = 0; i < 120; i++) {
     if ((await tabs()).length === 2) break;
     await sleep(1000);
   }
-  assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand", "cleaning_-_Clermont-Ferrand"], "the picked study is a second tab");
-  assert.equal(await layers(), 10, "the cleaning study's seven layers are what the panel now offers");
+  assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand", "cleaning_-_Clermont-Ferrand"], "the picked pairing is a second tab");
+  assert.equal(await layers(), 11, "the cleaning study's eight layers are what the panel now offers");
   assert(
     (await evaluate("document.querySelector('#ctl .note').innerText")).includes("10446 cells"),
     "the second study covers the same grid",
   );
 
   await press("[");
-  assert.equal(await layers(), 8, "`[` goes back to the detailing study");
+  assert.equal(await layers(), 9, "`[` goes back to the detailing study");
   await press("]");
-  assert.equal(await layers(), 10, "`]` comes forward again");
+  assert.equal(await layers(), 11, "`]` comes forward again");
 
   await press("w");
   assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand"], "`w` closes the active tab");
-  assert.equal(await layers(), 8, "and the panel is the surviving study's");
+  assert.equal(await layers(), 9, "and the panel is the surviving study's");
   await expectMarkers(141, "so is the map");
 
   assert.deepEqual(errors, [], "no uncaught exceptions");
