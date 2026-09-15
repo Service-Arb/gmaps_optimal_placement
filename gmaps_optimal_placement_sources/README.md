@@ -13,10 +13,11 @@ Search-volume providers are the exception and are a trait — see `docs/ARCHITEC
   is what says who could have been returned — and, for a rectangle, that nobody was standing in it.
 - [`searches::provider`] resolves a name to a [`searches::SearchVolume`]. A [`Keyword`] the provider
   has no data for carries `monthly: None`, which is not zero and must not be summed as one.
-- [`Work`] is the untracked cache, and carries the policy the CLI resolved: how old an answer of
-  each [`work::Kind`] may get before it is reported as old, and the daily search quota it counts
-  against. Bulk archives download once, POST responses are keyed by the request, so editing a query
-  refetches and rerunning does not. Nothing expires — [`Work::age`] reports, [`Work::preflight`]
-  refuses, and neither ever refetches.
+- [`Work`] is the untracked cache, and carries the policy the CLI resolved: how old an answer of each
+  [`work::Kind`] may get before it is reported as old. Bulk archives download once, POST responses are
+  keyed by the request, so editing a query refetches and rerunning does not. Anything computed out of
+  those is kept under a key its own inputs decide — the grid extract is one. Nothing expires and
+  nothing here refuses: [`Work::age`] reports how old an answer is, a sweep states what it is about
+  to buy before buying it, and `--refresh` is the only thing that re-asks.
 
 `GOOGLE_MAPS_KEY` must be in the environment for [`poi::load`].

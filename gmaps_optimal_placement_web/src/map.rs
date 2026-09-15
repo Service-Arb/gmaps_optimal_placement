@@ -165,16 +165,19 @@ impl State {
 			.or_else(|| pin.label.clone());
 		self.heavy.with_value(|h| {
 			let Some(m) = &h.model else { return };
-			self.report.set(Some(m.site_report(
-				pin.at,
-				label.as_deref(),
-				// a ranked pick is a cell centroid with a number for a label, and there is no trading
-				// name to score
-				pin.label.is_none().then_some(pin.name.as_str()),
-				self.lambda.get_untracked(),
-				&h.press,
-				&self.tiers.get_untracked(),
-			)));
+			self.report.set(Some(match m.traded() {
+				Some(t) => t.site_report(
+					pin.at,
+					label.as_deref(),
+					// a ranked pick is a cell centroid with a number for a label, and there is no trading
+					// name to score
+					pin.label.is_none().then_some(pin.name.as_str()),
+					self.lambda.get_untracked(),
+					&h.press,
+					&self.tiers.get_untracked(),
+				),
+				None => m.cell_report(pin.at, label.as_deref()),
+			}));
 		});
 	}
 
@@ -185,10 +188,7 @@ impl State {
 	}
 
 	fn rank(&self) {
-		let picks = self.heavy.with_value(|h| {
-			let m = h.model.as_ref()?;
-			Some(m.rank_sites(self.lambda.get_untracked(), &h.press, 10))
-		});
+		let picks = self.heavy.with_value(|h| Some(h.model.as_ref()?.traded()?.rank_sites(self.lambda.get_untracked(), &h.press, 10)));
 		let Some((picked, pool)) = picks else { return };
 		self.temp.set(
 			picked
@@ -235,8 +235,8 @@ impl State {
 		}
 		self.selected.set(None);
 		self.heavy.with_value(|h| {
-			let Some(m) = &h.model else { return };
-			self.report.set(Some(m.compare(&cands, self.lambda.get_untracked(), &h.press)));
+			let Some(t) = h.model.as_ref().and_then(|m| m.traded()) else { return };
+			self.report.set(Some(t.compare(&cands, self.lambda.get_untracked(), &h.press)));
 		});
 	}
 }
@@ -563,7 +563,7 @@ mod imp {
 #[cfg(feature = "hydrate")]
 mod imp {
 	use gmaps_optimal_placement_core::{
-		model::{LayerRef, LayerSpec, colorise},
+		model::{LayerRef, LayerSpec, TradeLayer, colorise},
 		payload::Trade,
 	};
 	use leptos::prelude::*;
@@ -610,12 +610,13 @@ mod imp {
 		s.heavy.update_value(|h| {
 			// a tab with no trade leaves nothing of the last one's sweep behind: the arrays are the
 			// active study's or they are empty
-			let Some(m) = h.model.clone().filter(|m| m.traded()) else {
+			let Some(m) = h.model.clone() else { return };
+			let Some(t) = m.traded() else {
 				(h.press, h.unmet) = (Vec::new(), Vec::new());
 				return;
 			};
-			h.press = m.pressure(s.lambda.get_untracked(), &s.tiers.get_untracked());
-			h.unmet = m.unmet(&h.press);
+			h.press = t.pressure(s.lambda.get_untracked(), &s.tiers.get_untracked());
+			h.unmet = t.unmet(&h.press);
 		});
 		s.recomputed.update(|n| *n += 1);
 	}
@@ -626,20 +627,30 @@ mod imp {
 		let of = s.focus.get_untracked();
 		let (legend, colors, shown) = s.heavy.with_value(|h| {
 			let m = h.model.as_ref().expect("layers only exist once the model does");
-			let v = m.values(spec.source, of, s.lambda.get_untracked(), &s.tiers.get_untracked(), &h.press, &h.unmet);
+			// `layers()` only offers a trade layer where there is a trade, so the miss below is that
+			// agreement having been broken rather than a state to draw something for
+			let (v, focus) = match spec.source {
+				LayerRef::Study(i) => (std::borrow::Cow::Borrowed(m.layer(i)), None),
+				LayerRef::Trade(t) => {
+					let traded = m.traded()?;
+					(
+						traded.values(t, of, s.lambda.get_untracked(), &s.tiers.get_untracked(), &h.press, &h.unmet),
+						matches!(t, TradeLayer::Share | TradeLayer::Seen).then(|| traded.trade.pois[of].poi.name.clone()),
+					)
+				}
+			};
 			let c = colorise(&v, &m.payload.imputed, s.hide_imputed.get_untracked(), spec.linear);
-			(
+			Some((
 				Legend {
 					ticks: c.ticks,
 					count: c.count,
 					linear: spec.linear,
-					focus: matches!(spec.source, LayerRef::Share | LayerRef::Seen)
-						.then(|| m.payload.trade.as_ref().expect("a coverage layer is only offered under a trade").pois[of].poi.name.clone()),
+					focus,
 				},
 				c.colors,
 				c.shown,
-			)
-		});
+			))
+		})?;
 		s.heavy.update_value(|h| h.shown = shown.clone());
 		Some((legend, colors, shown))
 	}
@@ -885,7 +896,7 @@ mod imp {
 			categories: m.payload.trade.iter().flat_map(categories).collect(),
 			imputed: m.payload.imputed.iter().filter(|&&i| i == 1).count(),
 			age_d: m.payload.trade.as_ref().and_then(|t| t.inventory_age_d),
-			traded: m.traded(),
+			traded: m.traded().is_some(),
 		}));
 		document().set_title(&m.payload.name);
 		// before the sweep, which is the one slow thing here and which no marker depends on

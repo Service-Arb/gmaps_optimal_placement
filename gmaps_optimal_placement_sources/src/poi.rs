@@ -148,9 +148,9 @@ pub fn search_text(work: &Work, key: Option<&str>, body: &serde_json::Value, mas
 
 pub fn load(cfg: &PoiConfig, bbox: Bbox, what: &str, work: &Work) -> Result<Inventory> {
 	let key = std::env::var("GOOGLE_MAPS_KEY").wrap_err("GOOGLE_MAPS_KEY is not set")?;
-	// the free walk first: a sweep that dies a third of the way through has already burnt the window
-	// it needed, and what it would have found is not worth a day
-	work.preflight(what, Need::AtLeast(sweep(cfg, bbox, None, work)?.missing))?;
+	// the free walk first, so what this is about to buy is on screen before it buys it. It reads the
+	// cache and nothing else, and a sweep is a tenth of a second against the grid scan behind it
+	work.announce(what, Need::AtLeast(sweep(cfg, bbox, None, work)?.missing));
 	work.forget(Kind::Inventory);
 	sweep(cfg, bbox, Some(&key), work)
 }

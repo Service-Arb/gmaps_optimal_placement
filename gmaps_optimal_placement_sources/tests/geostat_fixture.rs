@@ -57,6 +57,41 @@ fn four_cells_of_the_alps() {
 	assert!((width_deg * 111_320. * 47f64.to_radians().cos() - 1000.).abs() < 20., "east edge spans {width_deg} deg");
 }
 
+/// The rows kept beside the archive stand in for a scan of it, so what comes back has to be the same
+/// grid to the bit. A cell that moved by an ulp is the shifted-grid bug with a smaller number on it,
+/// and the JSON that would have carried floats here does not round-trip one.
+#[test]
+fn what_is_kept_rebuilds_the_grid_exactly() {
+	let (dir, work) = work_with_fixture("extract");
+	let bbox = Bbox { lat: [47.0, 47.3], lon: [9.4, 9.8] };
+
+	let scanned = grid::load(GridSource::Geostat1km, 2021, bbox, &work).unwrap();
+	let kept: Vec<_> = std::fs::read_dir(dir.path().join("data/extract")).unwrap().map(|e| e.unwrap().file_name()).collect();
+	assert_eq!(kept.len(), 1, "the scan left the rows it kept behind: {kept:?}");
+
+	let again = grid::load(GridSource::Geostat1km, 2021, bbox, &work).unwrap();
+	assert_eq!(again.len(), scanned.len());
+	for (a, b) in scanned.cells.iter().zip(&again.cells) {
+		assert_eq!((&a.id, &a.place, a.imputed), (&b.id, &b.place, b.imputed));
+		let bits = |r: &[[f64; 2]; 4]| r.iter().flatten().map(|v| v.to_bits()).collect::<Vec<_>>();
+		assert_eq!(bits(&a.ring), bits(&b.ring), "cell {} came back on a different ring", a.id);
+	}
+	for (name, values) in &scanned.columns {
+		let back = &again.columns[name];
+		let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+		assert_eq!(bits(values), bits(back), "column {name:?} came back with different numbers");
+	}
+
+	// the frame is half the key: a narrower one is a different question and not a hit on this answer
+	let narrower = Bbox {
+		lat: [47.0, 47.27],
+		lon: [9.4, 9.8],
+	};
+	let fewer = grid::load(GridSource::Geostat1km, 2021, narrower, &work).unwrap();
+	assert!(fewer.len() < scanned.len(), "{} cells for a narrower frame, against {}", fewer.len(), scanned.len());
+	assert_eq!(std::fs::read_dir(dir.path().join("data/extract")).unwrap().count(), 2, "and it is kept under its own key");
+}
+
 /// A vintage with no archive behind it is an error, not an empty map.
 #[test]
 fn unknown_vintage() {
