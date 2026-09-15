@@ -23,6 +23,9 @@ pub struct Payload {
 	/// The study's queries and what each is worth. `w` is already scored against them; the what-if
 	/// needs them because the business it scores does not exist yet.
 	pub terms: Vec<TermOut>,
+	/// Where the probe stood, in the order `PoiOut::seen` is indexed by. Empty until a study has been
+	/// probed, which is what decides whether the map offers an observed coverage layer at all.
+	pub nodes: Vec<[f64; 2]>,
 	pub pois: Vec<PoiOut>,
 	pub candidates: Vec<Candidate>,
 }
@@ -53,6 +56,9 @@ pub struct PoiOut {
 	pub poi: Poi,
 	/// How much this one counts, from `rank`, normalised so the median of its tier is 1.
 	pub w: f64,
+	/// What the probe saw of this business from each of `Payload::nodes`, and nothing modelled: a
+	/// competitor's real reach is lumpy and one radial decay cannot say so. Empty alongside `nodes`.
+	pub seen: Vec<f64>,
 }
 
 /// Whoever is already selling the service. The inventory that produces one is `gmaps_optimal_placement_sources`.

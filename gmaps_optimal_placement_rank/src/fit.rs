@@ -4,22 +4,13 @@
 //! its output is a table of five numbers, and those numbers are pasted into `rank::COEF` and
 //! committed.
 use eyre::{Result, ensure};
-use gmaps_optimal_placement_core::{
-	payload::Poi,
-	rank::{self, Biz, DIST, Feats, K, N, NAMES, Obs},
-};
-use gmaps_optimal_placement_sources::{Ranking, Region};
+use gmaps_optimal_placement_core::rank::{self, DIST, Feats, K, N, NAMES, Obs};
 use indexmap::IndexMap;
+
+use crate::{Observed, Ordering};
 
 const STEPS: usize = 2000;
 const LR: f64 = 0.02;
-/// A business absent from a search is absent for four reasons and only one of them is "weak": past
-/// the page cap (informative), outside the search area (a filter, not a ranking), irrelevant to the
-/// term, or deduped. So the choice set is what the *same term* returned anywhere — asking why a
-/// plumber did not appear in car-wash results collapses the fit to all-zero — intersected with the
-/// area this search could reach. For a node that is `REACH` times the furthest result it did return,
-/// which is self-calibrating and needs no magic radius; for a tile it is the tile.
-const REACH: f64 = 1.5;
 
 pub struct Fit {
 	pub coef: [f64; N],
@@ -82,8 +73,8 @@ impl Fit {
 		Ok(())
 	}
 
-	/// How often the model puts the same three businesses on top as Google did. The quantity that
-	/// matters, unlike the likelihood, which is only what the optimiser could differentiate.
+	/// How often the model puts the same three businesses on top as Google did. In sample, like
+	/// [`Fit::nll`] — held out is `crate::League`.
 	fn top3(&self) -> f64 {
 		let (mut sum, mut n) = (0., 0);
 		for o in self.obs.iter().filter(|o| o.ranked >= 3) {
@@ -98,82 +89,40 @@ impl Fit {
 }
 
 /// How Google ranks is one mechanism, so the evidence pools: every study's orderings go into one
-/// coefficient set, and each study's own term weights re-weight it afterwards.
-impl FromIterator<(Vec<Obs>, (f64, f64))> for Fit {
-	fn from_iter<I: IntoIterator<Item = (Vec<Obs>, (f64, f64))>>(it: I) -> Self {
+/// coefficient set, and each study's own term weights re-weight it afterwards. Features come from
+/// each study's own context, because the shrinkage target and the place list are the study's.
+impl<'a> FromIterator<&'a Observed> for Fit {
+	fn from_iter<I: IntoIterator<Item = &'a Observed>>(it: I) -> Self {
 		let (mut obs, mut reach) = (Vec::new(), (f64::MAX, 0f64));
-		for (o, r) in it {
-			obs.extend(o);
-			reach = (reach.0.min(r.0), reach.1.max(r.1));
+		for o in it {
+			obs.extend(self::obs(&o.feats, &o.orderings()));
+			reach = (reach.0.min(o.reach.0), reach.1.max(o.reach.1));
 		}
 		let (coef, nll) = adam(&obs, [true; N]);
 		Self { coef, nll, obs, reach }
 	}
 }
 
-/// One choice set per search, with the returned ids first and in order.
-pub fn observations(feats: &Feats, pois: &[Poi], rankings: &[Ranking]) -> Result<(Vec<Obs>, (f64, f64))> {
-	let by_id: IndexMap<&str, &Poi> = pois.iter().map(|p| (p.id.as_str(), p)).collect();
-	// attributes join by id, so a result the inventory dropped cannot be scored and leaves the set
-	let known = |ids: &[String]| -> Vec<&str> {
-		let mut out: Vec<&str> = Vec::new();
-		for id in ids {
-			if let Some((id, _)) = by_id.get_key_value(id.as_str())
-				&& !out.contains(id)
-			{
-				out.push(id);
-			}
-		}
-		out
-	};
-
-	let mut pool: IndexMap<&str, Vec<&str>> = IndexMap::new();
-	for r in rankings {
-		let seen = pool.entry(r.term.as_str()).or_default();
-		for id in known(&r.ids) {
-			if !seen.contains(&id) {
-				seen.push(id);
-			}
-		}
-	}
-
-	let (mut obs, mut reach) = (Vec::new(), (f64::MAX, 0f64));
-	for r in rankings {
-		let seen = known(&r.ids);
-		if seen.len() < 2 {
-			continue;
-		}
-		let node = match r.from {
-			Region::Tile(_) => None,
-			Region::Node(at, _) => Some(at),
-		};
-		let mut x: Vec<[f64; N]> = seen.iter().map(|id| feats.at(&Biz::from(by_id[id]), &r.term, node)).collect();
-		let far = x.iter().map(|x| x[DIST]).fold(0., f64::max);
-		if node.is_some() {
-			reach = (reach.0.min(x.iter().map(|x| x[DIST]).fold(f64::MAX, f64::min)), reach.1.max(far));
-		}
-
-		for id in pool[r.term.as_str()].iter().filter(|id| !seen.contains(id)) {
-			let p = by_id[id];
-			let reachable = match r.from {
-				Region::Tile(b) => (b.lat[0]..=b.lat[1]).contains(&p.lat) && (b.lon[0]..=b.lon[1]).contains(&p.lng),
-				Region::Node(..) => feats.at(&Biz::from(p), &r.term, node)[DIST] <= REACH * far,
-			};
-			if reachable {
-				x.push(feats.at(&Biz::from(p), &r.term, node));
-			}
-		}
-		obs.push(Obs { x, ranked: seen.len() });
-	}
-	ensure!(!obs.is_empty(), "no ordering carried two businesses the inventory knows");
-	Ok((obs, reach))
+/// Choice sets, read through one feature context.
+pub fn obs(ctx: &Feats, orderings: &[Ordering]) -> Vec<Obs> {
+	orderings
+		.iter()
+		.map(|o| Obs {
+			x: o.biz.iter().map(|b| ctx.at(b, o.term, o.node())).collect(),
+			ranked: o.ranked,
+		})
+		.collect()
 }
 
 /// Full-batch Adam. Five parameters over a few hundred orderings — batching would buy noise, and
-/// the whole run is seconds.
-fn adam(obs: &[Obs], on: [bool; N]) -> ([f64; N], f64) {
+/// the whole run is seconds. `on` masks a feature out by leaving it at the zero init.
+pub fn adam(obs: &[Obs], on: [bool; N]) -> ([f64; N], f64) {
 	let (mut c, mut m, mut v) = ([0.; N], [0.; N], [0.; N]);
-	for t in 1..=STEPS {
+	let steps = match on.iter().any(|&b| b) {
+		true => STEPS,
+		false => 0,
+	};
+	for t in 1..=steps {
 		let (_, g) = rank::nll_grad(obs, &c);
 		for i in (0..N).filter(|&i| on[i]) {
 			m[i] = 0.9 * m[i] + 0.1 * g[i];

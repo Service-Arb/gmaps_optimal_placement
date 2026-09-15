@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::proj::Reproject;
 
-#[derive(Clone, Copy, Debug, Deserialize, JsonSchema, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bbox {
 	/// [south, north], degrees

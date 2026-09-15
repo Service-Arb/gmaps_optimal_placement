@@ -3,6 +3,7 @@ members = [
     "gmaps_optimal_placement",
     "gmaps_optimal_placement_core",
     "gmaps_optimal_placement_misc",
+    "gmaps_optimal_placement_rank",
     "gmaps_optimal_placement_sources",
     "gmaps_optimal_placement_web",
 ]
@@ -26,6 +27,7 @@ unused_features = "allow"
 [workspace.dependencies]
 gmaps_optimal_placement_core = { path = "gmaps_optimal_placement_core", version = "0.1.0" }
 gmaps_optimal_placement_misc = { path = "gmaps_optimal_placement_misc", version = "0.1.0" }
+gmaps_optimal_placement_rank = { path = "gmaps_optimal_placement_rank", version = "0.1.0" }
 gmaps_optimal_placement_sources = { path = "gmaps_optimal_placement_sources", version = "0.1.0" }
 gmaps_optimal_placement_web = { path = "gmaps_optimal_placement_web", version = "0.1.0" }
 

@@ -29,6 +29,7 @@ pub struct Tab {
 	pub model: Option<Rc<Model>>,
 	pub lambda: f64,
 	pub layer: usize,
+	pub focus: usize,
 	pub hide_imputed: bool,
 	pub tiers: Vec<TierState>,
 	pub core: Vec<Pin>,
@@ -56,6 +57,9 @@ pub struct State {
 	/// Global: how you look at a map, not a property of a study.
 	pub opacity: RwSignal<f64>,
 	pub layer: RwSignal<usize>,
+	/// Which competitor the coverage layers are drawn about. Moved by clicking a marker; the
+	/// inventory is sorted by review count, so the opening one is the loudest name on the map.
+	pub focus: RwSignal<usize>,
 	pub hide_imputed: RwSignal<bool>,
 	pub tiers: RwSignal<Vec<TierState>>,
 	/// Bumped by every recompute, so the cheap effects can depend on it without depending on λ.
@@ -92,6 +96,7 @@ impl State {
 			lambda: RwSignal::new(2000.),
 			opacity: RwSignal::new(0.62),
 			layer: RwSignal::new(0),
+			focus: RwSignal::new(0),
 			hide_imputed: RwSignal::new(false),
 			tiers: RwSignal::new(Vec::new()),
 			recomputed: RwSignal::new(0),
@@ -244,6 +249,8 @@ pub struct Legend {
 	pub ticks: [f64; 5],
 	pub count: usize,
 	pub linear: bool,
+	/// Set on the coverage layers: whose cloud is on screen.
+	pub focus: Option<String>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -425,6 +432,7 @@ pub fn MapView() -> impl IntoView {
 					Some(
 						view! {
 							<b>{plain(&name)}</b>
+							{legend.focus.map(|f| view! { <span class="k">{format!(" — {f}")}</span> })}
 							<br />
 							{note}
 							<br />
@@ -478,7 +486,7 @@ mod imp {
 
 #[cfg(feature = "hydrate")]
 mod imp {
-	use gmaps_optimal_placement_core::model::{LayerSpec, colorise};
+	use gmaps_optimal_placement_core::model::{LayerRef, LayerSpec, colorise};
 	use leptos::prelude::*;
 	use wasm_bindgen::{closure::WasmClosure, prelude::*};
 
@@ -503,14 +511,17 @@ mod imp {
 	fn colours(s: State) -> Option<(Legend, Vec<u8>, Vec<u8>)> {
 		let layers: Vec<LayerSpec> = s.heavy.with_value(|h| h.model.as_ref().map(|m| m.layers()))?;
 		let spec = layers.get(s.layer.get_untracked())?;
+		let of = s.focus.get_untracked();
 		let (legend, colors, shown) = s.heavy.with_value(|h| {
 			let m = h.model.as_ref().expect("layers only exist once the model does");
-			let c = colorise(m.values(spec.source, &h.press, &h.unmet), &m.payload.imputed, s.hide_imputed.get_untracked(), spec.linear);
+			let v = m.values(spec.source, of, s.lambda.get_untracked(), &s.tiers.get_untracked(), &h.press, &h.unmet);
+			let c = colorise(&v, &m.payload.imputed, s.hide_imputed.get_untracked(), spec.linear);
 			(
 				Legend {
 					ticks: c.ticks,
 					count: c.count,
 					linear: spec.linear,
+					focus: matches!(spec.source, LayerRef::Share | LayerRef::Seen).then(|| m.payload.pois[of].poi.name.clone()),
 				},
 				c.colors,
 				c.shown,
@@ -532,6 +543,7 @@ mod imp {
 			on_move: &js_sys::Function,
 			on_out: &js_sys::Function,
 			on_pin: &js_sys::Function,
+			on_poi: &js_sys::Function,
 		) -> JsValue;
 		#[wasm_bindgen(js_name = cells)]
 		fn cells_js(el: &web_sys::HtmlElement, ring_x: &[f64], ring_y: &[f64], colors: &[u8], shown: &[u8]);
@@ -578,6 +590,7 @@ mod imp {
 		Effect::new(move |_| {
 			s.recomputed.track();
 			s.layer.track();
+			s.focus.track();
 			s.hide_imputed.track();
 			if !s.mounted.get() {
 				return;
@@ -692,6 +705,7 @@ mod imp {
 			label: model.payload.name.clone(),
 			lambda: model.payload.lambda_m,
 			layer: 0,
+			focus: 0,
 			hide_imputed: false,
 			tiers: model.tier_states(),
 			core,
@@ -713,6 +727,7 @@ mod imp {
 			let Some(t) = v.get_mut(i) else { return };
 			t.lambda = s.lambda.get_untracked();
 			t.layer = s.layer.get_untracked();
+			t.focus = s.focus.get_untracked();
 			t.hide_imputed = s.hide_imputed.get_untracked();
 			t.tiers = s.tiers.get_untracked();
 			t.core = s.core.get_untracked();
@@ -730,6 +745,7 @@ mod imp {
 		s.heavy.update_value(|h| h.model = Some(m.clone()));
 		s.lambda.set(t.lambda);
 		s.layer.set(t.layer);
+		s.focus.set(t.focus);
 		s.hide_imputed.set(t.hide_imputed);
 		s.tiers.set(t.tiers);
 		s.core.set(t.core);
@@ -981,9 +997,11 @@ mod imp {
 		}));
 		let on_out = leak(Closure::<dyn Fn()>::new(move || s.tip.set(None)));
 		let on_pin = leak(Closure::<dyn Fn(String)>::new(move |id: String| s.open(&id)));
+		// the marker order is the payload's own, so the index needs no lookup
+		let on_poi = leak(Closure::<dyn Fn(usize)>::new(move |i: usize| s.focus.set(i)));
 
 		let (c, zoom) = (model.payload.center, model.payload.zoom);
-		if let Some(msg) = mount_js(el, c[0], c[1], zoom, &on_click, &on_move, &on_out, &on_pin).await.as_string() {
+		if let Some(msg) = mount_js(el, c[0], c[1], zoom, &on_click, &on_move, &on_out, &on_pin, &on_poi).await.as_string() {
 			s.banner.set(Some(msg));
 			return false;
 		}

@@ -166,9 +166,9 @@ fn every_layer_colours() {
 
 	let mut s = String::new();
 	for spec in m.layers() {
-		let v = m.values(spec.source, &press, &unmet);
-		let shown = colorise(v, &m.payload.imputed, false, spec.linear);
-		let hidden = colorise(v, &m.payload.imputed, true, spec.linear);
+		let v = m.values(spec.source, 0, m.payload.lambda_m, &tiers, &press, &unmet);
+		let shown = colorise(&v, &m.payload.imputed, false, spec.linear);
+		let hidden = colorise(&v, &m.payload.imputed, true, spec.linear);
 		s.push_str(&format!(
 			"{:<28} {:>5} shown, {:>5} without imputed, ticks {}\n",
 			spec.name,
@@ -181,6 +181,7 @@ fn every_layer_colours() {
 	Underserved demand  ★        10446 shown,  3914 without imputed, ticks 0.01 · 2.14 · 6.63 · 15 · 162
 	Competitor pressure           8576 shown,  3692 without imputed, ticks 0.00 · 0.32 · 1.12 · 3.85 · 23
 	Demand                       10446 shown,  3914 without imputed, ticks 0.23 · 3.65 · 13 · 45 · 786
+	Coverage · modelled          10446 shown,  3914 without imputed, ticks 0.00 · 0.02 · 0.03 · 0.05 · 0.06
 	Population                   10446 shown,  3914 without imputed, ticks 1.00 · 4.00 · 15 · 50 · 1.3k
 	Households                   10446 shown,  3914 without imputed, ticks 0.30 · 1.90 · 6.20 · 21 · 828
 	Standard of living (€/yr)    10446 shown,  3914 without imputed, ticks 11k · 19k · 27k · 35k · 43k

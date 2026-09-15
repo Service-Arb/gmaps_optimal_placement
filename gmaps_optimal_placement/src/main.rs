@@ -2,6 +2,8 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{Parser, Subcommand};
 use eyre::Result;
+use gmaps_optimal_placement::Study;
+use gmaps_optimal_placement_rank::{League, Observed, Ordering, fit, pooled};
 use gmaps_optimal_placement_sources::Work;
 
 #[derive(Parser)]
@@ -58,6 +60,13 @@ enum Cmd {
 	/// into `gmaps_optimal_placement_core::rank::COEF`. How Google ranks is one mechanism, so this takes the
 	/// whole product and reads whatever each pairing has already collected
 	Fit {
+		#[command(flatten)]
+		at: Pair,
+	},
+	/// Which scoring model earns the map: every entrant cross-validated over the same orderings, held
+	/// out by the region each was asked from. Reads the work dir only, so it costs nothing. `fit`
+	/// produces the constant; this produces the argument for which constant
+	Strength {
 		#[command(flatten)]
 		at: Pair,
 	},
@@ -121,18 +130,18 @@ fn main() -> Result<()> {
 			Ok(())
 		}
 		Cmd::Fit { at } => {
-			// no picker: how Google ranks is one mechanism, so every pairing that has been harvested
-			// contributes. `Study::observations` reads the work dir and never the network, so a pairing
-			// nobody ever built costs nothing and says nothing
-			let (trades, locations) = (gmaps_optimal_placement::files(&at.trades)?, gmaps_optimal_placement::files(&at.locations)?);
-			let studies = trades
-				.iter()
-				.flat_map(|t| locations.iter().map(move |l| gmaps_optimal_placement::load(t, l)))
-				.collect::<Result<Vec<_>>>()?;
+			let (studies, observed) = harvest(&at, &work)?;
 			let lambda: Vec<f64> = studies.iter().map(|s| s.model.lambda_m).collect();
-			let fit: gmaps_optimal_placement::fit::Fit = studies.iter().map(|s| s.observations(&work)).collect::<Result<Vec<_>>>()?.into_iter().collect();
+			let fit: fit::Fit = observed.iter().collect();
 			report(fit.stats(&lambda));
 			fit.check()
+		}
+		Cmd::Strength { at } => {
+			let (_, observed) = harvest(&at, &work)?;
+			let orderings: Vec<Ordering> = observed.iter().flat_map(Observed::orderings).collect();
+			let league = League::run(&pooled(&observed)?, &orderings)?;
+			report(league.stats());
+			league.check()
 		}
 		Cmd::Misc { country, tally, per, floor, out } => {
 			let compiled = gmaps_optimal_placement::misc::compile(country, tally, &per, floor, &work)?;
@@ -147,6 +156,26 @@ fn main() -> Result<()> {
 			write(out.unwrap_or_else(|| work.path().join("out").join(format!("{}-searches.html", payload.name))), &html)
 		}
 	}
+}
+
+/// Every pairing of the two axes that has been harvested, and what it collected. No picker: how
+/// Google ranks is one mechanism, so every harvested pairing contributes. The studies come back
+/// alongside, filtered to the ones that said something.
+fn harvest(at: &Pair, work: &Work) -> Result<(Vec<Study>, Vec<Observed>)> {
+	let (trades, locations) = (gmaps_optimal_placement::files(&at.trades)?, gmaps_optimal_placement::files(&at.locations)?);
+	let studies = trades
+		.iter()
+		.flat_map(|t| locations.iter().map(move |l| gmaps_optimal_placement::load(t, l)))
+		.collect::<Result<Vec<_>>>()?;
+	let (mut kept, mut observed) = (Vec::new(), Vec::new());
+	for s in studies {
+		if let Some(o) = s.observations(work)? {
+			kept.push(s);
+			observed.push(o);
+		}
+	}
+	eyre::ensure!(!observed.is_empty(), "nothing under {} × {} has ever been harvested", at.trades.display(), at.locations.display());
+	Ok((kept, observed))
 }
 
 fn write(out: PathBuf, html: &str) -> Result<()> {

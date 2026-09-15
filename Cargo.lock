@@ -1047,6 +1047,7 @@ dependencies = [
  "eyre",
  "gmaps_optimal_placement_core",
  "gmaps_optimal_placement_misc",
+ "gmaps_optimal_placement_rank",
  "gmaps_optimal_placement_sources",
  "gmaps_optimal_placement_web",
  "indexmap",
@@ -1082,6 +1083,16 @@ dependencies = [
  "indexmap",
  "serde_json",
  "ureq",
+]
+
+[[package]]
+name = "gmaps_optimal_placement_rank"
+version = "0.1.0"
+dependencies = [
+ "eyre",
+ "gmaps_optimal_placement_core",
+ "gmaps_optimal_placement_sources",
+ "indexmap",
 ]
 
 [[package]]

@@ -30,17 +30,20 @@ documents, never to the code.
    │   Reproject · CellId · Grid · Expr                        │
    │   rank — features, Plackett–Luce, COEF                    │
    │   Payload — the whole thin waist                          │
-   │   model — pressure, unmet, capture, top-N                 │
+   │   model — pressure, unmet, capture, top-N, clouds         │
    └───────┬───────────────────────────────────────┬───────────┘
            │  every expression                     │  every slider
    ┌───────┴──────────────────────────┐   ┌────────┴──────────────────────┐
    │ gmaps_optimal_placement          │   │ gmaps_optimal_placement_web   │
    │   CLI, study, HTML               │──▶│   ssr: axum + server fns      │
    │   trades × locations             │   │   hydrate: the MapView island │
-   └──────────────────────────────────┘   │   map_core.js: google.maps    │
-                                          └────────┬──────────────────────┘
-                                                   ▼
-                                    a served map · one <name>-searches.html
+   └───────┬──────────────────────────┘   │   map_core.js: google.maps    │
+           │  the orderings on disk       └────────┬──────────────────────┘
+   ┌───────┴──────────────────────────┐            ▼
+   │ gmaps_optimal_placement_rank     │   a served map · one <name>-searches.html
+   │   Observed · Strategy · Strength │
+   │   Adam, k-fold, the league table │
+   └──────────────────────────────────┘
 ```
 
 `serve` holds the two axes rather than a study, and the page picks a point on their product — the
@@ -65,9 +68,14 @@ which are live controls. Moving either side across this line costs the map its i
 study its reproducibility.
 
 Competitor weight is baked, and deliberately: `rank` scores every competitor once in `build`, before
-the payload is serialised, so the browser only re-weights by tier and λ. Whatever the scoring
-function grows into, it never has to reach wasm. The one thing scored live is the what-if — one
-business, one arithmetic pass.
+the payload is serialised, so the browser only re-weights by tier and λ. What the probe observed of
+each competitor, node by node, is baked the same way. The one thing scored live is the what-if — one
+business, one arithmetic pass — so the scoring function reaches wasm only through that, and only a
+model that can score one hypothetical business has to.
+
+Where a fitted model *comes from* never reaches wasm at all. `gmaps_optimal_placement_rank` holds
+the optimiser, the entrants and the cross-validation, and is linked by the CLI alone: an entrant may
+carry whatever it needs without that landing in the browser or beside the HTTP server.
 
 Both sides are Rust. `gmaps_optimal_placement_core` is wasm-safe and holds the model, so the same code that
 `cargo t` pins against a fixture is the code the browser runs.
@@ -100,6 +108,10 @@ app, so every entry point in `map_core.js` returns a banner string instead.
 - **A fitted quantity is refitted, never hand-edited.** `rank::COEF` is the output of
   `gmaps_optimal_placement fit` over the orderings in the work dir. Nudging a coefficient because the map looks
   wrong turns a measurement back into the guess it replaced.
+- **A model earns the map out of sample.** `gmaps_optimal_placement strength` cross-validates every
+  entrant over the same orderings, held out by the region each was asked from, and refuses the table
+  if counting every competitor the same predicts Google as well. An in-sample likelihood cannot tell
+  a fitted weight from a memorised one, and a memorised one paints a map that looks decided.
 - **The study file is a seed, never a sink.** `serve` only reads it. Pins promoted or hidden on the
   map are a diff beside it, under `XDG_DATA_HOME` — data, not cache, because a promoted candidate is
   a decision and cache is what cleaners delete.
@@ -157,7 +169,9 @@ guess into authority. The worked examples are in `examples/`.
   and reviewed. The coefficient is co-movement, not causation, so the what-if reads "reviews
   associated with that rank" and never "reviews needed".
 - **The Places API ordering is not the local pack** a customer sees in Maps. It correlates with it;
-  it is a different list, from a different endpoint, with no personalisation and no map viewport.
+  it is a different list, from a different endpoint, with no personalisation and no map viewport. The
+  coverage layers draw that ordering — modelled as a share, or as the probe observed it — so a blue
+  field is a claim about the API's list, not about what a customer is shown.
 - **Name relevance is observed after Google's own filter.** These results came back *because* they
   matched the query, so the variation among them is compressed and the name coefficient rests on the
   businesses that sat at the censoring boundary.

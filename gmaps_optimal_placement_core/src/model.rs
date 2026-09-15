@@ -3,6 +3,8 @@
 //!
 //! No I/O and no `google.maps` — the browser recomputes here, and `cargo t` checks the same code
 //! against a fixture.
+use std::borrow::Cow;
+
 use eyre::{Result, ensure};
 use serde::Serialize;
 
@@ -45,13 +47,17 @@ pub struct TierState {
 	pub weight: f64,
 	pub show: bool,
 }
-/// Which array a layer paints. The first three are functions of the sliders; the rest were
-/// evaluated at build time.
+/// Which array a layer paints. The first three and the two clouds are functions of the sliders; the
+/// rest were evaluated at build time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LayerRef {
 	Unmet,
 	Pressure,
 	Demand,
+	/// One competitor's share of the cell under the fitted model.
+	Share,
+	/// The same competitor's reach as the probe observed it.
+	Seen,
 	Study(usize),
 }
 pub struct LayerSpec {
@@ -94,6 +100,9 @@ pub struct Model {
 	/// Cell centroids in metres from the grid's own centre. Flat-earth over one agglomeration.
 	mx: Vec<f64>,
 	my: Vec<f64>,
+	/// Probe nodes in the same frame, in `payload.nodes` order. Empty for an unprobed study.
+	nx: Vec<f64>,
+	ny: Vec<f64>,
 	lat0: f64,
 	lng0: f64,
 	m_per_lng: f64,
@@ -144,6 +153,21 @@ impl Model {
 		for i in 0..n {
 			(mx[i], my[i]) = local(c_lat[i], c_lng[i]);
 		}
+		let (mut nx, mut ny) = (Vec::new(), Vec::new());
+		for at in &payload.nodes {
+			let (x, y) = local(at[0], at[1]);
+			nx.push(x);
+			ny.push(y);
+		}
+		for p in &payload.pois {
+			ensure!(
+				p.seen.len() == payload.nodes.len(),
+				"competitor {:?} carries {} node observations against {} nodes",
+				p.poi.name,
+				p.seen.len(),
+				payload.nodes.len()
+			);
+		}
 		let comps = payload
 			.pois
 			.iter()
@@ -193,6 +217,8 @@ impl Model {
 			c_lng,
 			mx,
 			my,
+			nx,
+			ny,
 			lat0,
 			lng0,
 			m_per_lng,
@@ -254,6 +280,60 @@ impl Model {
 		self.payload.demand.iter().zip(press).map(|(d, p)| d / (1. + p)).collect()
 	}
 
+	/// One competitor's coverage cloud, cell by cell. `Share` is the Plackett–Luce share it takes of
+	/// the cell: its distance-decayed strength over everything else reaching there, which sums to one
+	/// across competitors and so reads as market share rather than as an unlabelled glow. `Seen` is
+	/// what the probe found, interpolated between the nodes it stood at — inverse square, so there is
+	/// no bandwidth to justify.
+	///
+	/// The denominator runs without `pressure`'s cutoff: a share is a ratio, and truncating only the
+	/// bottom of it moves the answer where `pressure` only loses a rounding error.
+	fn cloud(&self, source: LayerRef, of: usize, lambda: f64, tiers: &[TierState]) -> Vec<f64> {
+		let n = self.n();
+		let Some(comp) = self.comps.get(of) else { return vec![0.; n] };
+		match source {
+			LayerRef::Seen => {
+				let seen = &self.payload.pois[of].seen;
+				(0..n)
+					.map(|i| {
+						// the three nearest nodes and no others: over all of them the far field would
+						// converge on the study-wide average, and a competitor nobody saw across the river
+						// would read as a wash rather than as the zero it is. Three is what defines a plane.
+						let mut d: Vec<(f64, f64)> = seen
+							.iter()
+							.enumerate()
+							// a cell standing on a node takes that node's observation and nothing else
+							.map(|(k, s)| ((self.mx[i] - self.nx[k]).hypot(self.my[i] - self.ny[k]).powi(2).max(1.), *s))
+							.collect();
+						d.sort_by(|a, b| a.0.total_cmp(&b.0));
+						let (mut num, mut den) = (0., 0.);
+						for (d2, s) in d.iter().take(3) {
+							num += s / d2;
+							den += 1. / d2;
+						}
+						match den > 0. {
+							true => num / den,
+							false => 0.,
+						}
+					})
+					.collect()
+			}
+			_ => {
+				let pull = |c: &Comp, i: usize| c.w * tiers[c.tier].weight * (-(self.mx[i] - c.mx).hypot(self.my[i] - c.my) / lambda).exp();
+				let mut den = vec![0.; n];
+				for c in self.comps.iter().filter(|c| tiers[c.tier].show && c.w * tiers[c.tier].weight > 0.) {
+					for (i, d) in den.iter_mut().enumerate() {
+						*d += pull(c, i);
+					}
+				}
+				match tiers[comp.tier].show {
+					true => (0..n).map(|i| if den[i] > 0. { pull(comp, i) / den[i] } else { 0. }).collect(),
+					false => vec![0.; n],
+				}
+			}
+		}
+	}
+
 	/// The three that move under the sliders, then whatever the study asked for.
 	pub fn layers(&self) -> Vec<LayerSpec> {
 		let mut out = vec![
@@ -275,7 +355,24 @@ impl Model {
 				linear: false,
 				source: LayerRef::Demand,
 			},
+			LayerSpec {
+				name: "Coverage · modelled".to_owned(),
+				note: "The highlighted competitor's share of the cell: its strength against everything else reaching there. One global distance coefficient, so it is a circle — which is the control the observed layer is read against. Click a competitor to move the highlight.".to_owned(),
+				linear: true,
+				source: LayerRef::Share,
+			},
 		];
+		if !self.payload.nodes.is_empty() {
+			out.push(LayerSpec {
+				name: "Coverage · observed  ★".to_owned(),
+				note: format!(
+					"What the probe saw of the highlighted competitor at each of {} nodes, interpolated between them. Pure data: rank on the page, term weights applied, nothing modelled.",
+					self.payload.nodes.len()
+				),
+				linear: true,
+				source: LayerRef::Seen,
+			});
+		}
 		out.extend(self.payload.layers.iter().enumerate().map(|(i, l)| LayerSpec {
 			name: l.name.clone(),
 			note: l.note.clone(),
@@ -285,12 +382,14 @@ impl Model {
 		out
 	}
 
-	pub fn values<'a>(&'a self, source: LayerRef, press: &'a [f64], unmet: &'a [f64]) -> &'a [f64] {
+	/// `of` is the competitor the coverage layers are about, and is ignored by the rest.
+	pub fn values<'a>(&'a self, source: LayerRef, of: usize, lambda: f64, tiers: &[TierState], press: &'a [f64], unmet: &'a [f64]) -> Cow<'a, [f64]> {
 		match source {
-			LayerRef::Unmet => unmet,
-			LayerRef::Pressure => press,
-			LayerRef::Demand => &self.payload.demand,
-			LayerRef::Study(i) => &self.payload.layers[i].values,
+			LayerRef::Unmet => Cow::Borrowed(unmet),
+			LayerRef::Pressure => Cow::Borrowed(press),
+			LayerRef::Demand => Cow::Borrowed(&self.payload.demand),
+			LayerRef::Study(i) => Cow::Borrowed(&self.payload.layers[i].values),
+			LayerRef::Share | LayerRef::Seen => Cow::Owned(self.cloud(source, of, lambda, tiers)),
 		}
 	}
 

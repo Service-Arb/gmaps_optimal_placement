@@ -13,7 +13,7 @@ const S = new WeakMap();
 /// `shell()` resolves this once the Maps bootstrap has run.
 const ready = () => window.__mapsReady ?? Promise.reject(new Error('the Maps bootstrap never ran'));
 
-export async function mount(el, lat, lng, zoom, onClick, onMove, onOut, onPin) {
+export async function mount(el, lat, lng, zoom, onClick, onMove, onOut, onPin, onPoi) {
 	try {
 		if (S.has(el)) return null;
 		await ready();
@@ -24,7 +24,7 @@ export async function mount(el, lat, lng, zoom, onClick, onMove, onOut, onPin) {
 		});
 		const cv = document.createElement('canvas');
 		const s = {
-			map, cv, ctx: cv.getContext('2d'), onPin,
+			map, cv, ctx: cv.getContext('2d'), onPin, onPoi,
 			ringX: null, ringY: null, colors: null, shown: null, opacity: 0.62,
 			markers: [], tiers: null, pins: new Map(), iw: new google.maps.InfoWindow(),
 		};
@@ -101,12 +101,13 @@ function paint(el, s) {
 }
 
 /// The whole competitor inventory, replacing whatever is there. Each entry carries its tier index
-/// and its colour; the info window is presentation and stays here.
+/// and its colour; the info window is presentation and stays here. A click also tells Rust which
+/// competitor it was, which is what the coverage layers are drawn about.
 export function competitors(el, json) {
 	const s = S.get(el);
 	if (!s) return;
 	for (const m of s.markers) m.setMap(null);
-	s.markers = JSON.parse(json).map(c => {
+	s.markers = JSON.parse(json).map((c, i) => {
 		const scale = c.big ? 7 : 4.5;
 		const m = new google.maps.Marker({
 			position: { lat: c.lat, lng: c.lng }, title: c.name, zIndex: c.big ? 3 : 2,
@@ -126,6 +127,7 @@ export function competitors(el, json) {
 				★ ${c.rating ?? '–'} (${c.n_rev} reviews)${c.tel ? '<br>' + esc(c.tel) : ''}
 				${c.web ? `<br><a href="${esc(c.web)}" target="_blank" rel="noreferrer">website</a>` : ''}</div>`);
 			s.iw.open(s.map, m);
+			s.onPoi(i);
 		});
 		return m;
 	});

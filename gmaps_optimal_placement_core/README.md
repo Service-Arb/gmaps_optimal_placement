@@ -13,4 +13,5 @@ Grid geometry, reprojection and the expression language. No network, no filesyst
   orderings, and [`rank::COEF`], which `gmaps_optimal_placement fit` regenerates. [`rank::Feats`] extracts,
   [`rank::Rank`] scores, and only the second one checks the coefficients: the fit has to be able to
   read features before it has any. [`rank::nodes`] is the probe's sampler, and takes demand and
-  geometry only — the competitors are the regressor, and it may not see them.
+  geometry only — the competitors are the regressor, and it may not see them. No optimiser lives
+  here: `gmaps_optimal_placement_rank` holds that, and this crate is wasm-safe because it does not.

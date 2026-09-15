@@ -84,7 +84,7 @@ pub struct Ranking {
 }
 
 /// Where the search was asked from, which is what says who could have been returned.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Region {
 	/// `locationRestriction`: a hard filter with nobody standing in it. Distance is not defined,
 	/// and a coefficient fitted on it would be measuring the tiling.

@@ -2,7 +2,6 @@
 #![doc = include_str!("../README.md")]
 
 pub mod config;
-pub mod fit;
 pub mod render;
 
 use std::path::{Path, PathBuf};
@@ -16,6 +15,7 @@ use gmaps_optimal_placement_core::{
 pub use gmaps_optimal_placement_core::{Payload, payload};
 /// Whole-country reconnaissance rather than one agglomeration: which towns are worth a study.
 pub use gmaps_optimal_placement_misc as misc;
+use gmaps_optimal_placement_rank::Observed;
 pub use gmaps_optimal_placement_sources as sources;
 use gmaps_optimal_placement_sources::{Keyword, Ranking, Work, grid, poi, probe, searches};
 use indexmap::IndexMap;
@@ -91,16 +91,20 @@ impl Study {
 	}
 
 	/// The ordering evidence this study contributes: the inventory sweep always, the probe wherever
-	/// it has already been run. Reads the work dir, never the network.
-	pub fn observations(&self, work: &Work) -> Result<(Vec<core::rank::Obs>, (f64, f64))> {
+	/// it has already been run. Reads the work dir, never the network — so a pairing nobody has ever
+	/// built costs nothing and is `None`.
+	pub fn observations(&self, work: &Work) -> Result<Option<Observed>> {
 		let cells = self.cells(work)?;
 		let inv = poi::cached(&self.poi, self.area.bbox, work)?;
 		let mut obs = inv.obs;
 		let probed = probe::cached(work, &probe::plan(&at(&self.nodes(&cells)?), &self.terms(), self.radius_m()))?;
 		eprintln!("{}: {} orderings from the inventory sweep, {} from the probe", self.name, obs.len(), probed.len());
 		obs.extend(probed);
+		if obs.is_empty() {
+			return Ok(None);
+		}
 		let places: Vec<String> = cells.grid.cells.iter().map(|c| c.place.clone()).collect();
-		fit::observations(&feats(&places, &inv.pois)?, &inv.pois, &obs)
+		Observed::new(inv.pois, places, &obs).map(Some)
 	}
 
 	pub fn probe(&self, work: &Work, dry: bool) -> Result<Vec<Ranking>> {
@@ -148,18 +152,36 @@ impl Study {
 	}
 
 	pub fn build(&self, work: &Work) -> Result<Payload> {
-		let Cells { grid: g, demand, layers } = self.cells(work)?;
-		let n = g.len();
-		let place: Vec<String> = g.cells.iter().map(|c| c.place.clone()).collect();
+		let cells = self.cells(work)?;
+		let n = cells.grid.len();
+		let place: Vec<String> = cells.grid.cells.iter().map(|c| c.place.clone()).collect();
 		let inv = poi::load(&self.poi, self.area.bbox, work)?;
 		let model = Rank::try_new(feats(&place, &inv.pois)?, rank::COEF)?;
 		let terms: Vec<(String, f64)> = self.rank.terms.iter().map(|t| (t.text.clone(), t.weight)).collect();
+
+		// a study nobody has probed carries no nodes, and the map offers no observed coverage layer
+		let nodes = at(&self.nodes(&cells)?);
+		let probed = probe::cached(work, &probe::plan(&nodes, &self.terms(), self.radius_m()))?;
+		let seen = gmaps_optimal_placement_rank::observed(&inv.pois, &nodes, &probed, &terms);
+		let nodes = match probed.is_empty() {
+			true => Vec::new(),
+			false => nodes,
+		};
+
 		let mut pois: Vec<PoiOut> = inv
 			.pois
 			.into_iter()
-			.map(|p| {
+			.zip(seen)
+			.map(|(p, seen)| {
 				let w = model.strength(&Biz::from(&p), &terms);
-				PoiOut { poi: p, w }
+				PoiOut {
+					poi: p,
+					w,
+					seen: match nodes.is_empty() {
+						true => Vec::new(),
+						false => seen,
+					},
+				}
 			})
 			.collect();
 		normalise(&mut pois, &self.poi.tiers)?;
@@ -172,7 +194,7 @@ impl Study {
 		}
 
 		let mut ring = Vec::with_capacity(n * 8);
-		for c in &g.cells {
+		for c in &cells.grid.cells {
 			for p in c.ring {
 				// 5 decimals is ~1 m: below the cell size, and a third of the file size of full f64
 				ring.push(round1(p[0], 5));
@@ -187,9 +209,9 @@ impl Study {
 			demand_note: self.model.demand.clone(),
 			ring,
 			place,
-			imputed: g.cells.iter().map(|c| u8::from(c.imputed)).collect(),
-			demand: round(demand, 3),
-			layers,
+			imputed: cells.grid.cells.iter().map(|c| u8::from(c.imputed)).collect(),
+			demand: round(cells.demand, 3),
+			layers: cells.layers,
 			tiers: self
 				.poi
 				.tiers
@@ -200,6 +222,7 @@ impl Study {
 				})
 				.collect(),
 			terms: terms.into_iter().map(|(text, weight)| payload::TermOut { text, weight }).collect(),
+			nodes,
 			pois,
 			candidates: self.candidates.clone(),
 		})

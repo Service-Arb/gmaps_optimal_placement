@@ -63,6 +63,7 @@ impl<'a> From<&'a Poi> for Biz<'a> {
 
 /// The study-wide constants a feature vector is read against. Carries no coefficients: the fit
 /// needs features before it has any.
+#[derive(Clone)]
 pub struct Feats {
 	/// Shrinkage target: the mean rating over the inventory.
 	mu: f64,
