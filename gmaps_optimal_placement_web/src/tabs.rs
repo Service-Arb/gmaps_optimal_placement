@@ -8,13 +8,16 @@
 //!   GET /studies.json   trades, locations: the two axes the CLI was given
 //!                       open:              the pairing it was named, if it was named one
 //!        │
-//!   ┌────┴──── t ─→ Pool::Trade ─→ Pool::Location(trade)   pick what, then where; open a tab
+//!   ┌────┴──── t ─→ Pool::Study    two fields, what and where; Tab crosses, Enter takes the pair
 //!   │  Picker                      ↑ also where a served product starts
 //!   └───────── f ─→ Pool::Open     filter the open tabs, switch to one
 //! ```
 //!
-//! Two steps rather than one list of every pairing: a study is a point on a product, and an
-//! agglomeration times a trade list is a long list to read when what you know is one coordinate.
+//! One field per axis rather than one list of every pairing: a study is a point on a product, and
+//! an agglomeration times a trade list is a long list to read when what you know is one coordinate.
+//! Both fields are live at once, so a pairing is two narrowings in either order — which is what a
+//! step sequence could not do, having already spent the first choice by the time the second is on
+//! screen.
 //!
 //! This is the only picker: `serve` does not run `fzf` over a directory, because choosing the first
 //! study and choosing the fourth should not be two different motions.
@@ -29,15 +32,30 @@ use serde::{Deserialize, Serialize};
 
 use crate::map::State;
 
-/// Which set the picker is filtering.
-#[derive(Clone, Debug, PartialEq)]
+/// Which set the picker is filtering, and so how many fields it puts up.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pool {
-	/// Every trade served; picking one asks for its city next.
-	Trade,
-	/// Every location served, for the trade already chosen. Picking one opens a tab.
-	Location(String),
-	/// The open tabs; picking one switches to it.
+	/// The product served, as one field per axis. Taking it opens the tab.
+	Study,
+	/// The open tabs; taking one switches to it.
 	Open,
+}
+impl Pool {
+	/// The rightmost field, which is the one a click commits from.
+	fn last(self) -> usize {
+		match self {
+			Self::Study => 1,
+			Self::Open => 0,
+		}
+	}
+
+	fn prompt(self, col: usize) -> &'static str {
+		match (self, col) {
+			(Self::Study, 0) => "what is being sold",
+			(Self::Study, _) => "and where",
+			(Self::Open, _) => "find an open tab",
+		}
+	}
 }
 
 /// The bare keys, one per action. Digits jump to a tab by position and are not rebindable — there is
@@ -146,7 +164,7 @@ pub fn TabBar(state: State) -> impl IntoView {
 			<span
 				class="tab add"
 				title="open a study"
-				on:click=move |_| state.picker.set(Some(Pool::Trade))
+				on:click=move |_| state.picker.set(Some(Pool::Study))
 			>
 				"+"
 			</span>
@@ -164,117 +182,134 @@ pub fn TabBar(state: State) -> impl IntoView {
 	}
 }
 
-/// ↑/↓ (and `Ctrl-P`/`Ctrl-N`) clamp at both ends rather than wrap, `Enter` takes the highlighted
-/// row, `Escape` closes. The cursor sits on the first hit, as `fzf`'s does, and every edit of the
-/// query puts it back there.
+/// ↑/↓ (and `Ctrl-P`/`Ctrl-N`) clamp at both ends rather than wrap, `Tab` crosses to the other
+/// field, `Enter` takes what both fields have highlighted, `Escape` closes. A cursor sits on its
+/// field's first hit, as `fzf`'s does, and every edit of that query puts it back there — so a
+/// pairing is only ever one field away from being the one on screen.
+///
+/// A click lands its own field's cursor; from the rightmost field it also takes the pair, because
+/// there is nothing further left to narrow.
 #[component]
 pub fn Picker(state: State, pool: Pool) -> impl IntoView {
-	let query = RwSignal::new(String::new());
-	let sel = RwSignal::new(0usize);
-	let hits = {
-		let pool = pool.clone();
+	let cols = pool.last() + 1;
+	// one query and one cursor per axis, and which of them has the caret
+	let query = [RwSignal::new(String::new()), RwSignal::new(String::new())];
+	let sel = [RwSignal::new(0usize), RwSignal::new(0usize)];
+	let side = RwSignal::new(0usize);
+	let field = [NodeRef::<leptos::html::Input>::new(), NodeRef::<leptos::html::Input>::new()];
+
+	let hits: [Memo<Vec<(usize, String)>>; 2] = [0, 1].map(|col| {
 		Memo::new(move |_| {
-			let q = query.get();
-			let all: Vec<(usize, String)> = match &pool {
-				Pool::Trade => state.trades.get().into_iter().enumerate().collect(),
-				Pool::Location(_) => state.locations.get().into_iter().enumerate().collect(),
-				Pool::Open => state.tabs.get().into_iter().enumerate().map(|(i, t)| (i, t.label)).collect(),
+			let q = query[col].get();
+			let all: Vec<(usize, String)> = match (pool, col) {
+				(Pool::Study, 0) => state.trades.get().into_iter().enumerate().collect(),
+				(Pool::Study, _) => state.locations.get().into_iter().enumerate().collect(),
+				(Pool::Open, _) => state.tabs.get().into_iter().enumerate().map(|(i, t)| (i, t.label)).collect(),
 			};
-			all.into_iter().filter(|(_, s)| subsequence(&q, s)).collect::<Vec<_>>()
+			all.into_iter().filter(|(_, s)| subsequence(&q, s)).collect()
 		})
+	});
+	let at = move |col: usize| hits[col].with(|h| h.get(sel[col].get_untracked()).cloned());
+	// a field with no hit has nothing to contribute, and half a pairing opens nothing
+	let take = move || match pool {
+		Pool::Study => {
+			if let (Some((_, trade)), Some((_, location))) = (at(0), at(1)) {
+				state.picker.set(None);
+				crate::map::open(state, trade, location);
+			}
+		}
+		Pool::Open => {
+			if let Some((i, _)) = at(0) {
+				state.picker.set(None);
+				crate::map::activate(state, i);
+			}
+		}
 	};
-	let prompt = match &pool {
-		Pool::Trade => "what is being sold".to_owned(),
-		Pool::Location(trade) => format!("{trade} — and where"),
-		Pool::Open => "find an open tab".to_owned(),
-	};
-	let (on_enter, on_row) = (pool.clone(), pool.clone());
-	let field = NodeRef::<leptos::html::Input>::new();
+
 	// the overlay is modal, so the keys below are only ever the picker's
 	Effect::new(move |_| {
-		if let Some(el) = field.get() {
+		if let Some(el) = field[side.get()].get() {
 			el.focus().expect("the picker's field takes focus");
 		}
 	});
 	// arrowing past the visible rows would otherwise leave the cursor off screen
-	Effect::new(move |_| crate::map::scroll_pick(sel.get()));
+	Effect::new(move |_| crate::map::scroll_pick(sel[side.get()].get()));
 
 	view! {
-		<div id="picker" class="panel">
-			<input
-				type="text"
-				node_ref=field
-				placeholder=prompt
-				prop:value=move || query.get()
-				on:input=move |ev| {
-					query.set(event_target_value(&ev));
-					sel.set(0);
-				}
-				on:keydown=move |ev| {
-					let last = hits.with(|h| h.len()).saturating_sub(1);
-					let down = ev.key() == "ArrowDown" || (ev.ctrl_key() && ev.key() == "n");
-					let up = ev.key() == "ArrowUp" || (ev.ctrl_key() && ev.key() == "p");
-					if down || up {
-						ev.prevent_default();
-						return sel
-							.set(
-								if down {
-									(sel.get_untracked() + 1).min(last)
-								} else {
-									sel.get_untracked().saturating_sub(1)
-								},
-							);
+		<div id="picker" class="panel" class:two=cols == 2>
+			{(0..cols)
+				.map(|col| {
+					view! {
+						<div class="col" class:on=move || side.get() == col>
+							<input
+								type="text"
+								node_ref=field[col]
+								placeholder=pool.prompt(col)
+								prop:value=move || query[col].get()
+								on:input=move |ev| {
+									query[col].set(event_target_value(&ev));
+									sel[col].set(0);
+								}
+								on:keydown=move |ev| {
+									let last = hits[col].with(|h| h.len()).saturating_sub(1);
+									let down = ev.key() == "ArrowDown" || (ev.ctrl_key() && ev.key() == "n");
+									let up = ev.key() == "ArrowUp" || (ev.ctrl_key() && ev.key() == "p");
+									if down || up {
+										ev.prevent_default();
+										return sel[col]
+											.set(
+												if down {
+													(sel[col].get_untracked() + 1).min(last)
+												} else {
+													sel[col].get_untracked().saturating_sub(1)
+												},
+											);
+									}
+									if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
+										return;
+									}
+									// the fields are the only tab stops, so this wraps rather than leaving the overlay
+									if ev.key() == "Tab" {
+										ev.prevent_default();
+										return side.set((col + 1) % cols);
+									}
+									if ev.key() == "Enter" {
+										ev.prevent_default();
+										take();
+									}
+								}
+							/>
+							<ul>
+								{move || {
+									hits[col]
+										.get()
+										.into_iter()
+										.enumerate()
+										.map(|(row, (_, name))| {
+											view! {
+												<li
+													class:on=move || sel[col].get() == row
+													on:mouseenter=move |_| sel[col].set(row)
+													on:click=move |_| {
+														sel[col].set(row);
+														side.set(col);
+														if col == pool.last() {
+															take();
+														}
+													}
+												>
+													{name}
+												</li>
+											}
+										})
+										.collect_view()
+								}}
+							</ul>
+						</div>
 					}
-					if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
-						return;
-					}
-					if ev.key() == "Enter" {
-						ev.prevent_default();
-						if let Some((i, name)) = hits.with(|h| h.get(sel.get_untracked()).cloned()) {
-							take(state, &on_enter, i, name);
-						}
-					}
-				}
-			/>
-			<ul>
-				{move || {
-					let pool = on_row.clone();
-					hits
-						.get()
-						.into_iter()
-						.enumerate()
-						.map(|(row, (i, name))| {
-							let (pool, pick) = (pool.clone(), name.clone());
-							view! {
-								<li
-									class:on=move || sel.get() == row
-									on:mouseenter=move |_| sel.set(row)
-									on:click=move |_| take(state, &pool, i, pick.clone())
-								>
-									{name}
-								</li>
-							}
-						})
-						.collect_view()
-				}}
-			</ul>
+				})
+				.collect_view()}
 		</div>
-	}
-}
-
-/// What picking the highlighted row does. The trade step does not open anything — it narrows the
-/// picker to that trade's cities and stays up.
-fn take(state: State, pool: &Pool, i: usize, name: String) {
-	match pool {
-		Pool::Trade => state.picker.set(Some(Pool::Location(name))),
-		Pool::Location(trade) => {
-			state.picker.set(None);
-			crate::map::open(state, trade.clone(), name);
-		}
-		Pool::Open => {
-			state.picker.set(None);
-			crate::map::activate(state, i);
-		}
 	}
 }
 

@@ -678,7 +678,7 @@ mod imp {
 		// a product was served rather than one pairing, so the first choice is made the same way every
 		// later one is
 		match s.tabs.with_untracked(Vec::is_empty) {
-			true => s.picker.set(Some(Pool::Trade)),
+			true => s.picker.set(Some(Pool::Study)),
 			false => adopt(s, 0),
 		}
 	}
@@ -840,7 +840,7 @@ mod imp {
 	/// The picker's cursor, kept inside its own scroll box. Rows are one line each — see `#picker li`
 	/// — so the cursor's offset is its index times a row.
 	pub fn scroll_pick(row: usize) {
-		let Some(li) = document().query_selector("#picker li.on").ok().flatten() else { return };
+		let Some(li) = document().query_selector("#picker .col.on li.on").ok().flatten() else { return };
 		let Some(ul) = li.parent_element() else { return };
 		let (h, seen) = (li.client_height(), ul.client_height());
 		let (top, bottom) = (row as i32 * h, (row as i32 + 1) * h);
@@ -914,7 +914,7 @@ mod imp {
 		let at = s.active.get_untracked();
 		let ours = match k {
 			_ if k == m.open => {
-				s.picker.set(Some(Pool::Trade));
+				s.picker.set(Some(Pool::Study));
 				true
 			}
 			_ if k == m.find => {

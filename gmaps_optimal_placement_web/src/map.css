@@ -13,8 +13,13 @@ html,body{margin:0;height:100%;font:13px/1.45 system-ui,sans-serif;background:#1
 #gear{margin-left:auto;padding:0 12px;display:flex;align-items:center;cursor:pointer;color:#8892a0}
 #gear:hover{color:#e8e8ea}
 #picker,#settings{z-index:9;top:50px;left:50%;transform:translateX(-50%);width:340px}
+#picker{display:flex;gap:10px}
+#picker.two{width:560px}
+#picker .col{flex:1;min-width:0}
 #picker input[type=text]{width:100%;box-sizing:border-box;background:#2a2f38;color:#e8e8ea;
       border:1px solid #3a4150;border-radius:5px;padding:6px}
+#picker .col:not(.on) input[type=text]{opacity:.6}
+#picker .col:not(.on) li.on{background:#39404d}
 #picker ul{list-style:none;margin:6px 0 0;padding:0;max-height:50vh;overflow:auto}
 #picker li{padding:4px 6px;border-radius:4px;cursor:pointer;
       white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

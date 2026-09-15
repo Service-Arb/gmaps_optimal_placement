@@ -43,20 +43,21 @@ cargo install --path gmaps_optimal_placement
 # Set your Google Maps API key. The server reads it; it never lands in a file.
 export GOOGLE_MAPS_KEY=...
 
-# Serve the map. A study is a trade applied to a location, so give the two directories. The page
-# shows a picker: the trade first, then the city. Each pairing you select is a tab over one map.
-# Press `t` to open one more.
+# Serve the map. A study is a trade applied to a location, and the two directories are all this
+# takes — the page picks the pairing, with a field per axis: type in either, Tab to cross, Enter to
+# open it as a tab over one map. Press `t` for one more. Both flags default to what is shown here.
 # Bulk archives and API responses cache in $GMAPS_OPTIMAL_PLACEMENT_WORK (default ./tmp/geo);
 # candidates you promote from the map land in $XDG_DATA_HOME/gmaps_optimal_placement.
-gmaps_optimal_placement serve examples/trades examples/locations --open
+gmaps_optimal_placement serve --trades examples/trades --locations examples/locations --open
 
-# Name both as files to build one pairing before the server starts.
-gmaps_optimal_placement serve examples/trades/cleaning.nix examples/locations/Lyon.nix
+# Name an axis as a file rather than a directory to narrow it; name both and the pairing is built
+# before the server starts, which is how a scripted run never meets the picker.
+gmaps_optimal_placement serve -t examples/trades/cleaning.nix -l examples/locations/Lyon.nix
 
 # Chart the monthly search volume of each query group. Set the credentials of the provider first:
 # GOOGLE_ADS_{DEVELOPER_TOKEN,CLIENT_ID,CLIENT_SECRET,REFRESH_TOKEN,CUSTOMER_ID}, or
-# DATAFORSEO_{LOGIN,PASSWORD}. A directory is picked through fzf.
-gmaps_optimal_placement searches examples/trades examples/locations
+# DATAFORSEO_{LOGIN,PASSWORD}. Each axis is picked through fzf.
+gmaps_optimal_placement searches -t examples/trades -l examples/locations
 
 # Show the schema of the study document.
 gmaps_optimal_placement schema
@@ -66,14 +67,13 @@ gmaps_optimal_placement schema
 gmaps_optimal_placement misc france pool --per ind --floor 2000
 ```
 
-From a checkout, `nix run` does the same and builds the wasm client first. `open` and `searches`
-take the two paths or neither — one alone is an error, and the pair defaults to `examples/trades
-examples/locations`.
+From a checkout, `nix run` does the same and builds the wasm client first. Everything after `--` is
+the binary's own, so the two axes are the same flags, and paths are read from the repository root.
 
 ```sh
 nix run .#open
-nix run .#open -- examples/trades examples/locations/Lyon.nix
-nix run .#searches -- examples/trades examples/locations
+nix run .#open -- -l examples/locations/Lyon.nix
+nix run .#searches -- -t examples/trades/cleaning.nix
 nix run .#help
 ```
 

@@ -18,23 +18,24 @@ struct Cli {
 	cmd: Cmd,
 }
 
-/// The two axes a study is a point on. Either may be a single `*.nix` instead of a directory, which
-/// is how a scripted run names one without meeting a picker.
+/// The two axes a study is a point on. Named rather than positional: the two are the same shape, so
+/// nothing about a bare pair of paths says which one is which. Either may be a single `*.nix`
+/// instead of a directory, which is how a scripted run names one without meeting a picker.
 #[derive(Clone, clap::Args)]
 struct Pair {
 	/// What is being sold: queries, tiering, the demand model, the ranking terms
-	#[arg(default_value = "examples/trades")]
+	#[arg(short, long, default_value = "examples/trades")]
 	trades: PathBuf,
 	/// Where: the frame, the statistics office behind it, the premises in mind
-	#[arg(default_value = "examples/locations")]
+	#[arg(short, long, default_value = "examples/locations")]
 	locations: PathBuf,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
 	/// Where the people are: demand under the competitors, as a map served from here. The page picks
-	/// a trade and a city out of the two directories; naming both as files opens the one tab, already
-	/// built
+	/// a trade and a city out of the two directories, a field per axis; naming both as files opens
+	/// the one tab, already built
 	Serve {
 		#[command(flatten)]
 		at: Pair,

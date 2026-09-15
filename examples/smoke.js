@@ -73,19 +73,39 @@ async function main() {
     for (let i = 0; i < 20; i++) { got = await markers(); if (got === n) return; await sleep(500); }
     assert.equal(got, n, msg);
   };
+  const col = n => `document.querySelectorAll('#picker .col')[${n}]`;
+  const rows = n => evaluate(`[...${col(n)}.querySelectorAll('li')].map(l => l.textContent)`);
+  const pick = (n, name) => evaluate(`[...${col(n)}.querySelectorAll('li')].find(l => l.textContent === ${JSON.stringify(name)}).click()`);
+  const settled = () =>
+    evaluate("document.querySelectorAll('#ctl select option').length > 0 && !!document.querySelector('canvas')").catch(() => false);
   // the panel is server-rendered empty and filled by the island, so its contents are the only
-  // honest signal that the wasm landed and the payload parsed
+  // honest signal that the wasm landed and the payload parsed. Nothing is served prebuilt, so
+  // every visit starts at the picker and the fixture pairing is reached the way any other is
   const load = async () => {
     await send("Page.navigate", { url: URL_ });
     for (let i = 0; i < 60; i++) {
-      if (await evaluate("document.querySelectorAll('#ctl select option').length > 0 && !!document.querySelector('canvas')").catch(() => false)) return;
+      if (await evaluate("!!document.querySelector('#picker .col input')").catch(() => false)) break;
       await sleep(500);
+    }
+    await pick(0, "car_detailing");
+    await pick(1, "Clermont-Ferrand");
+    // an uncached pairing reads the 87 MB archive and every POI page before the panel can fill
+    for (let i = 0; i < 240; i++) {
+      if (await settled()) return;
+      await sleep(1000);
     }
     throw new Error("the island never settled");
   };
   const press = async key => {
     await send("Input.dispatchKeyEvent", { type: "keyDown", key, text: key });
     await send("Input.dispatchKeyEvent", { type: "keyUp", key });
+    await sleep(700);
+  };
+  // a named key carries no text, or the field it is aimed at takes the name as characters
+  const stroke = async (key, code) => {
+    const p = { key, code: key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code };
+    await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...p });
+    await send("Input.dispatchKeyEvent", { type: "keyUp", ...p });
     await sleep(700);
   };
   const tabs = () => evaluate("[...document.querySelectorAll('#tabs .tab:not(.add)')].map(t => t.textContent.replace('●',''))");
@@ -108,7 +128,7 @@ async function main() {
       layers: document.querySelectorAll('#ctl select option').length,
       tierRows: document.querySelectorAll('#ctl .row').length,
       ticks: [...document.querySelectorAll('#ticks span')].map(t => t.textContent).join(' '),
-      note: document.querySelector('#ctl .note').innerText.replace(/\\n/g, ' '),
+      note: document.querySelector('#ctl div.note').innerText.replace(/\\n/g, ' '),
       banner: document.querySelector('#banner')?.innerText ?? null,
       canvas: [cv.width, cv.height],
       painted: (() => { const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
@@ -118,7 +138,7 @@ async function main() {
   log("state:", s);
 
   assert.equal(s.banner, null, "no banner");
-  assert.equal(s.layers, 9, "three live layers plus the study's six");
+  assert.equal(s.layers, 10, "four live layers plus the study's six");
   assert.equal(s.tierRows, 3, "one row per tier, plus hide-imputed");
   assert(s.note.includes("10446 cells"), `legend counts the grid: ${s.note}`);
   assert(s.painted > 100, "canvas actually painted");
@@ -189,39 +209,47 @@ async function main() {
   await load();
   await expectMarkers(141, "deleting the pin file restores what the study declares");
 
-  // the CLI was given one trade and one location, so it opened one tab; the pool is their whole
-  // product, and a pairing nobody asked for is built the first time a tab does
+  // the CLI was given the two directories, so the pool is their whole product and the one open tab
+  // is what the picker was pointed at; a pairing nobody asked for is built the first time a tab does
   log("step: tabs");
-  assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand"], "the pairing the CLI was given is the one open tab");
-  assert.equal(await layers(), 9, "three live layers plus the study's six");
+  assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand"], "the pairing picked at load is the one open tab");
+  assert.equal(await layers(), 10, "four live layers plus the study's six");
 
-  const rows = () => evaluate("[...document.querySelectorAll('#picker li')].map(l => l.textContent)");
-  const pick = name => evaluate(`[...document.querySelectorAll('#picker li')].find(l => l.textContent === '${name}').click()`);
   await press("t");
-  assert.deepEqual(await rows(), ["car_detailing", "cleaning", "plumbing"], "the picker's first step is the trades");
-  await pick("cleaning");
-  assert.deepEqual(await rows(), ["Clermont-Ferrand", "Lyon"], "picking a trade narrows it to the locations");
-  await pick("Clermont-Ferrand");
+  assert.deepEqual(await rows(0), ["car_detailing", "cleaning", "plumbing"], "one field per axis, and this one is the trades");
+  assert.deepEqual(await rows(1), ["Clermont-Ferrand", "Lyon"], "the locations are up at the same time, not after");
+
+  // the two fields narrow independently — which is the whole of what a step sequence could not do
+  await press("c");
+  await press("l");
+  await press("e");
+  assert.deepEqual(await rows(0), ["cleaning"], "the caret starts in the trade field");
+  assert.deepEqual(await rows(1), ["Clermont-Ferrand", "Lyon"], "and narrowing the trade leaves the locations alone");
+  await stroke("Tab", 9);
+  await press("C");
+  assert.deepEqual(await rows(1), ["Clermont-Ferrand"], "Tab crosses to the location field");
+  assert.deepEqual(await rows(0), ["cleaning"], "without disturbing the trade behind it");
+  await stroke("Enter", 13);
   // the second pairing is evaluated on this request, which reads the grid archive again
-  for (let i = 0; i < 120; i++) {
+  for (let i = 0; i < 240; i++) {
     if ((await tabs()).length === 2) break;
     await sleep(1000);
   }
   assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand", "cleaning_-_Clermont-Ferrand"], "the picked pairing is a second tab");
-  assert.equal(await layers(), 11, "the cleaning study's eight layers are what the panel now offers");
+  assert.equal(await layers(), 12, "the cleaning study's eight layers are what the panel now offers");
   assert(
-    (await evaluate("document.querySelector('#ctl .note').innerText")).includes("10446 cells"),
+    (await evaluate("document.querySelector('#ctl div.note').innerText")).includes("10446 cells"),
     "the second study covers the same grid",
   );
 
   await press("[");
-  assert.equal(await layers(), 9, "`[` goes back to the detailing study");
+  assert.equal(await layers(), 10, "`[` goes back to the detailing study");
   await press("]");
-  assert.equal(await layers(), 11, "`]` comes forward again");
+  assert.equal(await layers(), 12, "`]` comes forward again");
 
   await press("w");
   assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand"], "`w` closes the active tab");
-  assert.equal(await layers(), 9, "and the panel is the surviving study's");
+  assert.equal(await layers(), 10, "and the panel is the surviving study's");
   await expectMarkers(141, "so is the map");
 
   assert.deepEqual(errors, [], "no uncaught exceptions");

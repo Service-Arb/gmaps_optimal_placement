@@ -71,7 +71,9 @@
         '';
 
         # The smoke test asserts Clermont's numbers, so it takes no study: `smoke.js` and
-        # `car_detailing.nix` x `Clermont-Ferrand.nix` are one fixture.
+        # `car_detailing.nix` x `Clermont-Ferrand.nix` are one fixture. It is served the whole
+        # product rather than that pairing, because reaching the pairing through the picker is
+        # itself one of the things under test.
         study = pkgs.writeShellApplication {
           name = "study";
           runtimeInputs = with pkgs; [ rust git pkg-config openssl mold nodejs chromium psmisc nix curl wasm-bindgen-cli ];
@@ -82,10 +84,9 @@
             # the smoke promotes and drops pins, so it gets a data dir of its own
             XDG_DATA_HOME="$(mktemp -d)"
             export XDG_DATA_HOME
-            cargo run -p gmaps_optimal_placement -- serve examples/trades/car_detailing.nix examples/locations/Clermont-Ferrand.nix --port ${toString port} &
+            cargo run -p gmaps_optimal_placement -- serve --port ${toString port} &
             server=$!
             trap 'kill $server 2>/dev/null || true; rm -rf "$XDG_DATA_HOME"' EXIT
-            # the router only exists once the study is evaluated, which reads an 87 MB archive
             for _ in $(seq 120); do
               curl -sf -o /dev/null "http://localhost:${toString port}/pkg/gmaps_optimal_placement_web.js" && break
               sleep 1
@@ -93,34 +94,27 @@
             node examples/smoke.js "http://localhost:${toString port}/"
           '';
         };
-        # `open [<trades> <locations>]` — build the client, serve, open a browser. Directories land on
-        # the page's own two-step picker, which is also what `t` opens for every tab after the first.
+        # `open [-t <trades>] [-l <locations>]` — build the client, serve, open a browser. The axes
+        # are the binary's own flags; everything here does is build the client and hold the port.
+        # Paths are read from the repository root, which is where the defaults live.
         open = pkgs.writeShellApplication {
           name = "open-map";
           runtimeInputs = with pkgs; [ rust git pkg-config openssl mold psmisc xdg-utils nix wasm-bindgen-cli ];
           text = ''
-            [ $# -eq 0 ] || [ $# -eq 2 ] || { echo "usage: nix run .#open [<trades> <locations>]" >&2; exit 1; }
-            if [ $# -eq 2 ]; then trades="$(realpath "$1")"; locations="$(realpath "$2")"; else trades=""; locations=""; fi
             cd "$(git rev-parse --show-toplevel)"
-            trades="''${trades:-examples/trades}"
-            locations="''${locations:-examples/locations}"
             ${client}
             fuser -k ${toString port}/tcp 2>/dev/null || true
-            exec cargo run -p gmaps_optimal_placement -- serve "$trades" "$locations" --port ${toString port} --open
+            exec cargo run -p gmaps_optimal_placement -- serve "$@" --port ${toString port} --open
           '';
         };
-        # `searches <trades> <locations>` — build the volume chart, serve it, open it.
+        # `searches [-t <trades>] [-l <locations>]` — build the volume chart, serve it, open it.
         searches = pkgs.writeShellApplication {
           name = "open-searches";
           runtimeInputs = with pkgs; [ rust git pkg-config openssl mold python3 psmisc xdg-utils nix fzf ];
           text = ''
-            [ $# -eq 0 ] || [ $# -eq 2 ] || { echo "usage: nix run .#searches [<trades> <locations>]" >&2; exit 1; }
-            if [ $# -eq 2 ]; then trades="$(realpath "$1")"; locations="$(realpath "$2")"; else trades=""; locations=""; fi
             cd "$(git rev-parse --show-toplevel)"
-            trades="''${trades:-examples/trades}"
-            locations="''${locations:-examples/locations}"
             out="''${GMAPS_OPTIMAL_PLACEMENT_WORK:-tmp/geo}/out"
-            cargo run -p gmaps_optimal_placement -- searches "$trades" "$locations" --out "$out/searches.html"
+            cargo run -p gmaps_optimal_placement -- searches "$@" --out "$out/searches.html"
             fuser -k ${toString port}/tcp 2>/dev/null || true
             xdg-open "http://localhost:${toString port}/searches.html" &
             cd "$out" && python3 -m http.server ${toString port}
@@ -145,12 +139,13 @@
           name = "help";
           text = ''
             cat <<'EOF'
-            nix run .#open [<trades> <locations>]  serve the map on :${toString port} and open it (Ctrl-C to stop).
-                                            directories (default examples/trades examples/locations) open
-                                            the page's own picker — trade first, then city; `t` opens
-                                            another pairing, each as a tab over one map
-            nix run .#searches [<trades> <locations>]  open the monthly search-volume chart for the query
-                                            groups of one pairing. a directory is picked through fzf
+            nix run .#open -- [-t <trades>] [-l <locations>]  serve the map on :${toString port} and open it
+                                            (Ctrl-C to stop). the two directories (default
+                                            examples/trades examples/locations) are all this takes —
+                                            the page picks the pairing, trade and city side by side,
+                                            and `t` opens another as a tab over the same map
+            nix run .#searches -- [-t <trades>] [-l <locations>]  open the monthly search-volume chart for
+                                            the query groups of one pairing. each axis is picked through fzf
             nix run .#misc <country> <tally>  which towns in a country to write a study about at all:
                                             pool | building | parcel per --per column, --floor to skip hamlets
             nix run .#study                 serve the Clermont map and assert it in headless Chromium

@@ -46,10 +46,14 @@ documents, never to the code.
    └──────────────────────────────────┘
 ```
 
-`serve` holds the two axes rather than a study, and the page picks a point on their product — the
-trade, then the city. The server builds a pairing the first time a tab asks for it, and the page
-keeps several open over one map instance. Naming both as files builds one before the listener binds,
-which is what keeps a scripted run off the picker.
+`serve` holds the two axes rather than a study, and the page picks a point on their product — one
+field per axis, both live at once, because a coordinate is known in either order. The server builds
+a pairing the first time a tab asks for it, and the page keeps several open over one map instance.
+Naming both axes as files builds one before the listener binds, which is what keeps a scripted run
+off the picker.
+
+The axes are `--trades` and `--locations` rather than two positionals: they are the same shape, so
+nothing about a bare pair of paths says which is which.
 
 What a pairing is *called* — `<trade>_-_<location>`, from the two stems — is the CLI's to say. The
 web crate keys on the stems and the pin file keys on the name, so neither has a second spelling of
