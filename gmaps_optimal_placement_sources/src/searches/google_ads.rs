@@ -73,11 +73,13 @@ impl GoogleAds {
 			.ok_or_else(|| eyre::eyre!("searches.place {place:?} is empty"))?;
 		let body = serde_json::json!({"locationNames": {"names": [city]}, "locale": lang});
 		let auth = format!("Bearer {}", self.access_token()?);
-		let res = work.cached_post(
-			&format!("{API}/geoTargetConstants:suggest"),
-			&body,
-			&[("Authorization", &auth), ("developer-token", &self.developer_token)],
-		)?;
+		let res = work
+			.cached_post(
+				&format!("{API}/geoTargetConstants:suggest"),
+				&body,
+				&[("Authorization", &auth), ("developer-token", &self.developer_token)],
+			)?
+			.0;
 		if let Some(e) = res.get("error") {
 			bail!("geoTargetConstants:suggest for {city:?}: {e}");
 		}
@@ -112,7 +114,7 @@ impl SearchVolume for GoogleAds {
 			"keywordPlanNetwork": "GOOGLE_SEARCH",
 		});
 		let url = format!("{API}/customers/{}:generateKeywordIdeas", self.customer_id);
-		let res = work.cached_post(&url, &body, &self.headers()?)?;
+		let res = work.cached_post(&url, &body, &self.headers()?)?.0;
 		if let Some(e) = res.get("error") {
 			bail!("generateKeywordIdeas for {seeds:?}: {e}");
 		}

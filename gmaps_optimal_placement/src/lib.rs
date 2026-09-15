@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod render;
+pub mod settings;
 
 use std::path::{Path, PathBuf};
 
@@ -115,10 +116,12 @@ impl Study {
 				eprintln!("  {:.5}, {:.5}   {:.1}% of demand", n.at[0], n.at[1], 100. * n.share);
 			}
 			eprintln!("{} nodes, biased {:.1} km", nodes.len(), self.radius_m() / 1000.);
-			eprintln!("{} searches, one call each: {} Text Search Essentials", plan.len(), plan.len());
-			return Ok(Vec::new());
+			let need = probe::unanswered(work, &plan)?;
+			eprintln!("{} searches, {need} still unanswered: {need} Text Search Essentials", plan.len());
+			// the same refusal a run would meet, before it has a key in hand to meet it with
+			return work.preflight(&self.name, sources::work::Need::Exact(need)).map(|()| Vec::new());
 		}
-		let out = probe::run(work, plan)?;
+		let out = probe::run(work, &self.name, plan)?;
 		eprintln!("probe: {} orderings over {} billed calls", out.len(), work.billed());
 		Ok(out)
 	}
@@ -155,7 +158,7 @@ impl Study {
 		let cells = self.cells(work)?;
 		let n = cells.grid.len();
 		let place: Vec<String> = cells.grid.cells.iter().map(|c| c.place.clone()).collect();
-		let inv = poi::load(&self.poi, self.area.bbox, work)?;
+		let inv = poi::load(&self.poi, self.area.bbox, &self.name, work)?;
 		let model = Rank::try_new(feats(&place, &inv.pois)?, rank::COEF)?;
 		let terms: Vec<(String, f64)> = self.rank.terms.iter().map(|t| (t.text.clone(), t.weight)).collect();
 
@@ -210,6 +213,7 @@ impl Study {
 			ring,
 			place,
 			imputed: cells.grid.cells.iter().map(|c| u8::from(c.imputed)).collect(),
+			inventory_age_d: work.age(sources::work::Kind::Inventory).map(|a| round1(a.oldest.as_secs_f64() / 86_400., 1)),
 			demand: round(cells.demand, 3),
 			layers: cells.layers,
 			tiers: self

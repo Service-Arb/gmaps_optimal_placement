@@ -46,7 +46,11 @@ schemars = { version = "1", features = ["indexmap2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
+smart-default = "0.7"
 ureq = "3"
+# the CLI's own settings, and `Timeframe` for the cache ages. Only the top crate depends on it:
+# `_sources` is handed resolved durations, so `_core`/`_web` and the wasm build stay clear of it.
+v_utils = { version = "=2.18.0", default-features = false, features = ["cli", "macros"] }
 zip = "8"
 
 # The leptos family and the wasm toolchain are pinned exactly: a `wasm-bindgen` crate/CLI schema skew

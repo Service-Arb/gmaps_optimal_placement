@@ -242,6 +242,8 @@ pub struct Loaded {
 	pub layers: Vec<(String, String)>,
 	pub tier_counts: Vec<usize>,
 	pub imputed: usize,
+	/// How old the competitor inventory under this map is. `None` where it was bought on this run.
+	pub age_d: Option<f64>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -406,6 +408,13 @@ pub fn MapView() -> impl IntoView {
 					"Hide imputed cells (" {move || s.loaded.get().map(|l| l.imputed.to_string())} ")"
 				</label>
 			</div>
+
+			{move || {
+				s.loaded
+					.get()
+					.and_then(|l| l.age_d)
+					.map(|d| view! { <p class="note">{format!("Competitors as of {d:.0} days ago")}</p> })
+			}}
 
 			<button on:click=move |_| s.rank()>"Rank top 10 sites"</button>
 			<button
@@ -756,6 +765,7 @@ mod imp {
 			layers: m.layers().into_iter().map(|l| (l.name, l.note)).collect(),
 			tier_counts: m.payload.tiers.iter().map(|t| m.payload.pois.iter().filter(|p| p.poi.tier == t.name).count()).collect(),
 			imputed: m.payload.imputed.iter().filter(|&&i| i == 1).count(),
+			age_d: m.payload.inventory_age_d,
 		}));
 		document().set_title(&m.payload.name);
 		// before the sweep, which is the one slow thing here and which no marker depends on

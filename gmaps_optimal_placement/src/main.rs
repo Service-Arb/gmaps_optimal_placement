@@ -2,13 +2,18 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{Parser, Subcommand};
 use eyre::Result;
-use gmaps_optimal_placement::Study;
+use gmaps_optimal_placement::{
+	Study,
+	settings::{AppConfig, SettingsCommand, SettingsFlags},
+};
 use gmaps_optimal_placement_rank::{League, Observed, Ordering, fit, pooled};
 use gmaps_optimal_placement_sources::Work;
 
 #[derive(Parser)]
 #[command(about = "Paint a study's demand model over the competitors already on the ground")]
 struct Cli {
+	#[clap(flatten)]
+	settings: SettingsFlags,
 	#[command(subcommand)]
 	cmd: Cmd,
 }
@@ -38,6 +43,10 @@ enum Cmd {
 		/// Point the desktop browser at it once it is up
 		#[arg(long)]
 		open: bool,
+		/// Buy the competitor inventory again rather than serve what is on disk. The only thing that
+		/// spends on a question already answered — an answer past its `age` is reported, never refetched
+		#[arg(long)]
+		refresh: bool,
 	},
 	/// How many people ask for it: monthly volume per query group, as one HTML chart
 	Searches {
@@ -55,6 +64,9 @@ enum Cmd {
 		/// Print the node placement and the call budget, spend nothing
 		#[arg(long)]
 		dry_run: bool,
+		/// Ask every node again rather than serve the orderings on disk
+		#[arg(long)]
+		refresh: bool,
 	},
 	/// Refit the ranking model over every ordering in the work dir, and print the table that goes
 	/// into `gmaps_optimal_placement_core::rank::COEF`. How Google ranks is one mechanism, so this takes the
@@ -86,19 +98,34 @@ enum Cmd {
 		#[arg(short, long)]
 		out: Option<PathBuf>,
 	},
-	/// Print the study document's JSON schema
+	/// Print the study document's JSON schema. What the tool's own settings look like is `config
+	/// schema` — a study is the question, the settings are what asking it costs
 	Schema,
+	/// The tool's own settings: write defaults, diff against them, and generate the JSON Schema /
+	/// Nix module an editor reads
+	Config {
+		#[command(subcommand)]
+		cmd: SettingsCommand,
+	},
 }
 
 fn main() -> Result<()> {
 	color_eyre::install()?;
-	let work = Work::from_env();
-	match Cli::parse().cmd {
+	let cli = Cli::parse();
+	if let Cmd::Config { cmd } = cli.cmd {
+		// never returns
+		AppConfig::handle_settings_command(cmd, cli.settings);
+	}
+	let cfg = AppConfig::try_build(cli.settings)?;
+	let refresh = matches!(cli.cmd, Cmd::Serve { refresh, .. } | Cmd::Probe { refresh, .. } if refresh);
+	let work = Work::from_env().policy((&cfg.age).into(), cfg.places.per_day).refresh(refresh);
+	match cli.cmd {
+		Cmd::Config { .. } => unreachable!("handled above, and `handle_settings_command` exits"),
 		Cmd::Schema => {
 			println!("{}", serde_json::to_string_pretty(&schemars::schema_for!(gmaps_optimal_placement::Study))?);
 			Ok(())
 		}
-		Cmd::Serve { at, port, open } => {
+		Cmd::Serve { at, port, open, refresh: _ } => {
 			// the page picks out of the two directories, so `fzf` is not one of two pickers to learn. A
 			// pair named as files is built here instead: its statistics print, and a study that will not
 			// build fails before the listener binds
@@ -116,15 +143,16 @@ fn main() -> Result<()> {
 				_ => Vec::new(),
 			};
 			// the work dir rather than `work` itself: `Work` holds a `Cell`, and the server calls this
-			// from whichever blocking thread a tab's first request landed on
-			let dir = work.path().to_owned();
+			// from whichever blocking thread a tab's first request landed on. `--refresh` does not come
+			// along: it belongs to the run that asked for it, and a tab switch is not one
+			let (dir, age, per_day) = (work.path().to_owned(), (&cfg.age).into(), cfg.places.per_day);
 			let build = std::sync::Arc::new(move |trade: &std::path::Path, location: &std::path::Path| {
-				let payload = gmaps_optimal_placement::load(trade, location)?.build(&Work::at(dir.clone()))?;
+				let payload = gmaps_optimal_placement::load(trade, location)?.build(&Work::at(dir.clone()).policy(age, per_day))?;
 				Ok(serde_json::to_string(&payload)?)
 			});
 			gmaps_optimal_placement_web::serve::serve(trades, locations, prebuilt, build, SocketAddr::from(([127, 0, 0, 1], port)), open)
 		}
-		Cmd::Probe { at, dry_run } => {
+		Cmd::Probe { at, dry_run, refresh: _ } => {
 			let (trade, location) = (gmaps_optimal_placement::pick(&at.trades)?, gmaps_optimal_placement::pick(&at.locations)?);
 			gmaps_optimal_placement::load(&trade, &location)?.probe(&work, dry_run)?;
 			Ok(())

@@ -6,7 +6,7 @@ use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::work::Work;
+use crate::work::{Kind, Need, Work};
 
 pub const SEARCH_TEXT: &str = "https://places.googleapis.com/v1/places:searchText";
 /// Enterprise SKU: `rating`, `websiteUri` and `nationalPhoneNumber` each pull the mask up a tier.
@@ -97,6 +97,9 @@ pub enum Region {
 pub struct Inventory {
 	pub pois: Vec<Poi>,
 	pub obs: Vec<Ranking>,
+	/// (query, tile) pairs this walk found no answer for. A lower bound on what a keyed sweep would
+	/// spend, because a tile that comes back at the cap opens four more. Zero once one has paid.
+	pub missing: usize,
 }
 
 /// One text search, paged, in rank order. The body and the field mask are the caller's, because
@@ -105,7 +108,7 @@ pub struct Inventory {
 /// No key is the read-only mode: pages come out of the work dir and the first miss ends the search.
 /// A caller holding no key cannot buy, which is what lets the fit replay a sweep rather than pay
 /// for one.
-pub fn search_text(work: &Work, key: Option<&str>, body: &serde_json::Value, mask: &str, pages: usize) -> Result<Vec<(String, serde_json::Value)>> {
+pub fn search_text(work: &Work, key: Option<&str>, body: &serde_json::Value, mask: &str, pages: usize, kind: Kind) -> Result<Vec<(String, serde_json::Value)>> {
 	let mut out = Vec::new();
 	let mut token: Option<String> = None;
 	for _ in 0..pages {
@@ -113,13 +116,14 @@ pub fn search_text(work: &Work, key: Option<&str>, body: &serde_json::Value, mas
 		if let Some(t) = &token {
 			body["pageToken"] = serde_json::Value::String(t.clone());
 		}
-		let res = match key {
+		let (res, at) = match key {
 			Some(k) => work.cached_post(SEARCH_TEXT, &body, &[("X-Goog-Api-Key", k), ("X-Goog-FieldMask", mask)])?,
 			None => match work.cached(SEARCH_TEXT, &body)? {
 				Some(hit) => hit,
 				None => break,
 			},
 		};
+		work.record(kind, at);
 		if let Some(e) = res.get("error") {
 			bail!("Places text search {}: {e}", body["textQuery"]);
 		}
@@ -135,8 +139,12 @@ pub fn search_text(work: &Work, key: Option<&str>, body: &serde_json::Value, mas
 	Ok(out)
 }
 
-pub fn load(cfg: &PoiConfig, bbox: Bbox, work: &Work) -> Result<Inventory> {
+pub fn load(cfg: &PoiConfig, bbox: Bbox, what: &str, work: &Work) -> Result<Inventory> {
 	let key = std::env::var("GOOGLE_MAPS_KEY").wrap_err("GOOGLE_MAPS_KEY is not set")?;
+	// the free walk first: a sweep that dies a third of the way through has already burnt the window
+	// it needed, and what it would have found is not worth a day
+	work.preflight(what, Need::AtLeast(sweep(cfg, bbox, None, work)?.missing))?;
+	work.forget(Kind::Inventory);
 	sweep(cfg, bbox, Some(&key), work)
 }
 
@@ -160,7 +168,13 @@ fn sweep(cfg: &PoiConfig, bbox: Bbox, key: Option<&str>, work: &Work) -> Result<
 		descend(work, key, q, bbox, 0, &mut found).wrap_err_with(|| format!("sweeping {q:?}: a rerun resumes from here, and re-asks nothing already answered"))?;
 		eprintln!("  {q:?}: {} orderings, {} billed so far", found.obs.len(), work.billed());
 	}
-	let Found { raw, obs, censored } = found;
+	let Found { raw, obs, censored, missing } = found;
+	if let Some(a) = work.age(Kind::Inventory) {
+		eprintln!("places: served from cache, {a}");
+		if a.stale {
+			eprintln!("  past `age.inventory` — shops have opened and closed since. `--refresh` re-asks, and costs a day's quota");
+		}
+	}
 	if !censored.is_empty() {
 		eprintln!(
 			"places: {} tiles are still at the {CAP}-result cap at depth {DEPTH}, so the inventory under them is partial:",
@@ -208,7 +222,7 @@ fn sweep(cfg: &PoiConfig, bbox: Bbox, key: Option<&str>, work: &Work) -> Result<
 	}
 	out.sort_by(|a, b| b.n_rev.total_cmp(&a.n_rev));
 	eprintln!("places: {} raw over {} searches ({} billed), {} kept", raw.len(), obs.len(), work.billed(), out.len());
-	Ok(Inventory { pois: out, obs })
+	Ok(Inventory { pois: out, obs, missing })
 }
 
 /// One query over one tile, quartered wherever the answer came back at the cap. Splitting is per
@@ -224,7 +238,12 @@ fn descend(work: &Work, key: Option<&str>, query: &str, tile: Bbox, depth: u32, 
 		"high": {"latitude": tile.lat[1], "longitude": tile.lon[1]},
 	});
 	let body = serde_json::json!({"textQuery": query, "pageSize": 20, "locationRestriction": {"rectangle": rect}});
-	let page = search_text(work, key, &body, FIELDS, 3)?;
+	// asked here rather than inferred from an empty page: a tile nobody harvested and one Google
+	// returned nothing for read the same out of `search_text`, and only the first would cost anything
+	if work.refreshing() || work.cached(SEARCH_TEXT, &body)?.is_none() {
+		found.missing += 1;
+	}
+	let page = search_text(work, key, &body, FIELDS, 3, Kind::Inventory)?;
 	// an ordering of nothing identifies nothing, and under a read-only key it is also what a tile
 	// that was never harvested looks like
 	if page.is_empty() {
@@ -261,6 +280,7 @@ struct Found {
 	obs: Vec<Ranking>,
 	/// Query and tile still at the cap at the depth floor: the inventory under them is partial.
 	censored: Vec<(String, Bbox)>,
+	missing: usize,
 }
 
 struct Matcher {

@@ -10,7 +10,7 @@ use eyre::{Result, WrapErr};
 
 use crate::{
 	poi::{self, Ranking, Region},
-	work::Work,
+	work::{Kind, Need, Work},
 };
 
 const MASK: &str = "places.id,nextPageToken";
@@ -44,14 +44,29 @@ pub fn plan(nodes: &[[f64; 2]], terms: &[String], radius_m: f64) -> Vec<(Ranking
 }
 
 /// Calls at most `PAGES` per plan entry. Cached, so a rerun is free.
-pub fn run(work: &Work, plan: Vec<(Ranking, serde_json::Value)>) -> Result<Vec<Ranking>> {
+pub fn run(work: &Work, what: &str, plan: Vec<(Ranking, serde_json::Value)>) -> Result<Vec<Ranking>> {
 	let key = std::env::var("GOOGLE_MAPS_KEY").wrap_err("GOOGLE_MAPS_KEY is not set")?;
+	work.preflight(what, Need::Exact(unanswered(work, &plan)?))?;
 	plan.into_iter()
 		.map(|(mut r, body)| {
-			r.ids = poi::search_text(work, Some(&key), &body, MASK, PAGES)?.into_iter().map(|(id, _)| id).collect();
+			r.ids = poi::search_text(work, Some(&key), &body, MASK, PAGES, Kind::Ordering)?.into_iter().map(|(id, _)| id).collect();
 			Ok(r)
 		})
 		.collect()
+}
+
+/// What a run would spend: one call per plan entry the work dir has no answer for, and every entry
+/// under `--refresh`. Exact — a probe is one page from one point, and nothing about the answer
+/// changes how many more there are to make.
+pub fn unanswered(work: &Work, plan: &[(Ranking, serde_json::Value)]) -> Result<usize> {
+	if work.refreshing() {
+		return Ok(plan.len());
+	}
+	let mut n = 0;
+	for (_, body) in plan {
+		n += usize::from(work.cached(poi::SEARCH_TEXT, body)?.is_none());
+	}
+	Ok(n)
 }
 
 /// What of the plan is already on disk. A study that has never been probed yields nothing, which is
@@ -59,7 +74,7 @@ pub fn run(work: &Work, plan: Vec<(Ranking, serde_json::Value)>) -> Result<Vec<R
 pub fn cached(work: &Work, plan: &[(Ranking, serde_json::Value)]) -> Result<Vec<Ranking>> {
 	let mut out = Vec::new();
 	for (r, body) in plan {
-		let ids: Vec<String> = poi::search_text(work, None, body, MASK, PAGES)?.into_iter().map(|(id, _)| id).collect();
+		let ids: Vec<String> = poi::search_text(work, None, body, MASK, PAGES, Kind::Ordering)?.into_iter().map(|(id, _)| id).collect();
 		if !ids.is_empty() {
 			out.push(Ranking { ids, ..r.clone() });
 		}

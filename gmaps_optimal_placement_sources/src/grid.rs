@@ -14,7 +14,7 @@ use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::work::Work;
+use crate::work::{Kind, Work};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum GridSource {
@@ -234,7 +234,9 @@ fn commune_names(codes: &BTreeSet<String>, work: &Work) -> Result<HashMap<String
 		if codes.iter().all(|c| names.contains_key(c)) {
 			break;
 		}
-		for c in work.cached_get(&url, &cache)?.as_array().ok_or_else(|| eyre::eyre!("{url} did not return an array"))? {
+		let (list, at) = work.cached_get(&url, &cache)?;
+		work.record(Kind::Communes, at);
+		for c in list.as_array().ok_or_else(|| eyre::eyre!("{url} did not return an array"))? {
 			let (code, nom) = (c["code"].as_str(), c["nom"].as_str());
 			let (Some(code), Some(nom)) = (code, nom) else {
 				bail!("{url} returned a commune without code and nom: {c}")
@@ -257,6 +259,9 @@ fn commune_names(codes: &BTreeSet<String>, work: &Work) -> Result<HashMap<String
 		.collect();
 	if !retired.is_empty() {
 		eprintln!("communes: {} code(s) no longer current, shown as codes: {retired:?}", retired.len());
+	}
+	if work.age(Kind::Communes).is_some_and(|a| a.stale) {
+		eprintln!("communes: the cached list is past `age.communes`, so a merger since then shows as a code");
 	}
 	Ok(out)
 }

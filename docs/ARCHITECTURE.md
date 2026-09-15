@@ -35,7 +35,7 @@ documents, never to the code.
            │  every expression                     │  every slider
    ┌───────┴──────────────────────────┐   ┌────────┴──────────────────────┐
    │ gmaps_optimal_placement          │   │ gmaps_optimal_placement_web   │
-   │   CLI, study, HTML               │──▶│   ssr: axum + server fns      │
+   │   CLI, study, settings, HTML     │──▶│   ssr: axum + server fns      │
    │   trades × locations             │   │   hydrate: the MapView island │
    └───────┬──────────────────────────┘   │   map_core.js: google.maps    │
            │  the orderings on disk       └────────┬──────────────────────┘
@@ -118,6 +118,15 @@ app, so every entry point in `map_core.js` returns a banner string instead.
 - **`GOOGLE_MAPS_KEY` lives in the server's environment, never in an artifact.** Bulk archives and
   API responses cache under `GMAPS_OPTIMAL_PLACEMENT_WORK` (default `./tmp/geo`) so a rerun costs nothing — the
   INSEE archive is ~87 MB and Places calls are billed.
+- **Nothing in that cache expires.** An answer older than its kind's configured age is served anyway,
+  and its age rides onto the map beside the imputed flag. Google's daily search quota is the scarce
+  side, and refetching spends a day of it to learn what is mostly the same thing; `--refresh` is the
+  only thing that re-asks. Age is a caption, never a trigger.
+- **A run that would not finish does not start.** `SearchTextRequestPerDayPerProject` is a hard
+  hundred a day and no API key can read what is left of it, so a ledger beside the cache counts what
+  `Work::cached_post` sent and every subcommand that spends states its need first. A sweep that dies
+  two thirds of the way through has already burnt the window it needed, and what it bought is a
+  partial inventory that looks whole.
 
 ## Sources are an enum
 

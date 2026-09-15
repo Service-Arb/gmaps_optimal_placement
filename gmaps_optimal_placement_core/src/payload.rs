@@ -17,6 +17,10 @@ pub struct Payload {
 	pub ring: Vec<f64>,
 	pub place: Vec<String>,
 	pub imputed: Vec<u8>,
+	/// Days since the oldest competitor answer this map was painted from was written. `None` when
+	/// every one of them was bought on this run. Provenance, like `imputed`: nothing is evicted, so
+	/// without it a map drawn from two-year-old competitors looks like one drawn this morning.
+	pub inventory_age_d: Option<f64>,
 	pub demand: Vec<f64>,
 	pub layers: Vec<LayerOut>,
 	pub tiers: Vec<TierOut>,
