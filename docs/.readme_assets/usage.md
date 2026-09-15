@@ -1,3 +1,4 @@
+```sh
 # Set your Google Maps API key. The server reads it; it never lands in a file.
 export GOOGLE_MAPS_KEY=...
 
@@ -22,3 +23,15 @@ gmaps_optimal_placement schema
 # Find the towns in a country that are worth a study. Count what a cadastre draws, per commune, and
 # divide by a column of the grid. Towns below the floor are not counted, and not downloaded.
 gmaps_optimal_placement misc france pool --per ind --floor 2000
+```
+
+From a checkout, `nix run` does the same and builds the wasm client first. `open` and `searches`
+take the two paths or neither — one alone is an error, and the pair defaults to `examples/trades
+examples/locations`.
+
+```sh
+nix run .#open
+nix run .#open -- examples/trades examples/locations/Lyon.nix
+nix run .#searches -- examples/trades examples/locations
+nix run .#help
+```
