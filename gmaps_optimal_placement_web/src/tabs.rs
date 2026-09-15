@@ -8,7 +8,7 @@
 //!   GET /studies.json   trades, locations: the two axes the CLI was given
 //!                       open:              the pairing it was named, if it was named one
 //!        │
-//!   ┌────┴──── t ─→ Pool::Study    two fields, what and where; Tab crosses, Enter takes the pair
+//!   ┌────┴──── t ─→ Pool::Study    two fields, what and where; Enter crosses, Ctrl-Enter takes
 //!   │  Picker                      ↑ also where a served product starts
 //!   └───────── f ─→ Pool::Open     filter the open tabs, switch to one
 //! ```
@@ -41,11 +41,11 @@ pub enum Pool {
 	Open,
 }
 impl Pool {
-	/// The rightmost field, which is the one a click commits from.
-	fn last(self) -> usize {
+	/// How many fields it puts up: one per axis being crossed.
+	fn cols(self) -> usize {
 		match self {
-			Self::Study => 1,
-			Self::Open => 0,
+			Self::Study => 2,
+			Self::Open => 1,
 		}
 	}
 
@@ -182,16 +182,17 @@ pub fn TabBar(state: State) -> impl IntoView {
 	}
 }
 
-/// ↑/↓ (and `Ctrl-P`/`Ctrl-N`) clamp at both ends rather than wrap, `Tab` crosses to the other
-/// field, `Enter` takes what both fields have highlighted, `Escape` closes. A cursor sits on its
-/// field's first hit, as `fzf`'s does, and every edit of that query puts it back there — so a
-/// pairing is only ever one field away from being the one on screen.
+/// ↑/↓ (and `Ctrl-P`/`Ctrl-N`) clamp at both ends rather than wrap, `Tab` and `Enter` cross to the
+/// other field, `Ctrl-Enter` and the `↵` button take what the fields have highlighted, `Escape`
+/// closes. A cursor sits on its field's first hit, as `fzf`'s does, and every edit of that query
+/// puts it back there — so a pairing is only ever one field away from being the one on screen.
 ///
-/// A click lands its own field's cursor; from the rightmost field it also takes the pair, because
-/// there is nothing further left to narrow.
+/// A click lands its own field's cursor and the caret, and does no more: half a pairing is not a
+/// choice to act on, and a cursor that followed the mouse would make the click itself invisible.
+/// Where there is only one field, crossing has nowhere to go and `Enter` takes.
 #[component]
 pub fn Picker(state: State, pool: Pool) -> impl IntoView {
-	let cols = pool.last() + 1;
+	let cols = pool.cols();
 	// one query and one cursor per axis, and which of them has the caret
 	let query = [RwSignal::new(String::new()), RwSignal::new(String::new())];
 	let sel = [RwSignal::new(0usize), RwSignal::new(0usize)];
@@ -212,18 +213,16 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 	let at = move |col: usize| hits[col].with(|h| h.get(sel[col].get_untracked()).cloned());
 	// a field with no hit has nothing to contribute, and half a pairing opens nothing
 	let take = move || match pool {
-		Pool::Study => {
+		Pool::Study =>
 			if let (Some((_, trade)), Some((_, location))) = (at(0), at(1)) {
 				state.picker.set(None);
 				crate::map::open(state, trade, location);
-			}
-		}
-		Pool::Open => {
+			},
+		Pool::Open =>
 			if let Some((i, _)) = at(0) {
 				state.picker.set(None);
 				crate::map::activate(state, i);
-			}
-		}
+			},
 	};
 
 	// the overlay is modal, so the keys below are only ever the picker's
@@ -265,17 +264,20 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 												},
 											);
 									}
+									if ev.key() == "Enter" {
+										ev.prevent_default();
+										return match ev.ctrl_key() || cols == 1 {
+											true => take(),
+											false => side.set((col + 1) % cols),
+										};
+									}
 									if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
 										return;
 									}
 									// the fields are the only tab stops, so this wraps rather than leaving the overlay
 									if ev.key() == "Tab" {
 										ev.prevent_default();
-										return side.set((col + 1) % cols);
-									}
-									if ev.key() == "Enter" {
-										ev.prevent_default();
-										take();
+										side.set((col + 1) % cols);
 									}
 								}
 							/>
@@ -289,13 +291,9 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 											view! {
 												<li
 													class:on=move || sel[col].get() == row
-													on:mouseenter=move |_| sel[col].set(row)
 													on:click=move |_| {
 														sel[col].set(row);
 														side.set(col);
-														if col == pool.last() {
-															take();
-														}
 													}
 												>
 													{name}
@@ -309,6 +307,9 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 					}
 				})
 				.collect_view()}
+			<button class="go" title="Ctrl+Enter" on:click=move |_| take()>
+				"↵"
+			</button>
 		</div>
 	}
 }

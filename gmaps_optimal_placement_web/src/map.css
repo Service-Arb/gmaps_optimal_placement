@@ -24,6 +24,7 @@ html,body{margin:0;height:100%;font:13px/1.45 system-ui,sans-serif;background:#1
 #picker li{padding:4px 6px;border-radius:4px;cursor:pointer;
       white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #picker li.on{background:#2f6df6;color:#fff}
+#picker button.go{flex:none;width:auto;margin:0;padding:6px 10px;align-self:flex-start;font-size:13px}
 #settings .row{justify-content:space-between}
 #settings button.sec{width:64px;margin:0;font-variant-numeric:tabular-nums}
 .panel{position:absolute;z-index:5;background:#1b1e23ee;color:#e8e8ea;border-radius:8px;

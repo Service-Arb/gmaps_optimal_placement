@@ -76,6 +76,7 @@ async function main() {
   const col = n => `document.querySelectorAll('#picker .col')[${n}]`;
   const rows = n => evaluate(`[...${col(n)}.querySelectorAll('li')].map(l => l.textContent)`);
   const pick = (n, name) => evaluate(`[...${col(n)}.querySelectorAll('li')].find(l => l.textContent === ${JSON.stringify(name)}).click()`);
+  const take = () => evaluate("document.querySelector('#picker button.go').click()");
   const settled = () =>
     evaluate("document.querySelectorAll('#ctl select option').length > 0 && !!document.querySelector('canvas')").catch(() => false);
   // the panel is server-rendered empty and filled by the island, so its contents are the only
@@ -87,8 +88,10 @@ async function main() {
       if (await evaluate("!!document.querySelector('#picker .col input')").catch(() => false)) break;
       await sleep(500);
     }
+    // a click lands a cursor and nothing else, so the pairing is taken on its own
     await pick(0, "car_detailing");
     await pick(1, "Clermont-Ferrand");
+    await take();
     // an uncached pairing reads the 87 MB archive and every POI page before the panel can fill
     for (let i = 0; i < 240; i++) {
       if (await settled()) return;
@@ -102,8 +105,8 @@ async function main() {
     await sleep(700);
   };
   // a named key carries no text, or the field it is aimed at takes the name as characters
-  const stroke = async (key, code) => {
-    const p = { key, code: key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code };
+  const stroke = async (key, code, modifiers = 0) => {
+    const p = { key, code: key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, modifiers };
     await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...p });
     await send("Input.dispatchKeyEvent", { type: "keyUp", ...p });
     await sleep(700);
@@ -229,7 +232,10 @@ async function main() {
   await press("C");
   assert.deepEqual(await rows(1), ["Clermont-Ferrand"], "Tab crosses to the location field");
   assert.deepEqual(await rows(0), ["cleaning"], "without disturbing the trade behind it");
+  // Enter crosses as Tab does; only Ctrl+Enter and the button spend both fields at once
   await stroke("Enter", 13);
+  assert(await evaluate("!!document.querySelector('#picker')"), "Enter alone leaves the picker up");
+  await stroke("Enter", 13, 2);
   // the second pairing is evaluated on this request, which reads the grid archive again
   for (let i = 0; i < 240; i++) {
     if ((await tabs()).length === 2) break;
