@@ -12,6 +12,9 @@ use sha2::{Digest, Sha256};
 pub struct Work {
 	dir: PathBuf,
 	billed: Cell<usize>,
+	/// Configured rather than `ureq::post`: the default turns a 4xx into an error before the body is
+	/// read, and a Google error body is the only thing that says which quota ran out.
+	agent: ureq::Agent,
 }
 
 impl Work {
@@ -25,6 +28,7 @@ impl Work {
 		Self {
 			dir: dir.into(),
 			billed: Cell::new(0),
+			agent: ureq::Agent::config_builder().http_status_as_error(false).build().new_agent(),
 		}
 	}
 
@@ -76,14 +80,20 @@ impl Work {
 		}
 		let canonical = serde_json::to_string(body)?;
 		let dst = self.post_path(url, &canonical)?;
-		let mut req = ureq::post(url).header("Content-Type", "application/json");
+		let mut req = self.agent.post(url).header("Content-Type", "application/json");
 		for (k, v) in headers {
 			req = req.header(*k, *v);
 		}
-		self.billed.set(self.billed.get() + 1);
 		let mut res = req.send(canonical.as_bytes()).wrap_err_with(|| format!("POST {url}"))?;
+		let status = res.status();
 		let mut text = String::new();
 		res.body_mut().as_reader().read_to_string(&mut text)?;
+		// the body of a refusal says which quota or which field, and it is never written to the cache:
+		// one cached 429 would answer for that request forever
+		if !status.is_success() {
+			bail!("POST {url} -> {status}\n{}", text.trim());
+		}
+		self.billed.set(self.billed.get() + 1);
 		let json: serde_json::Value = serde_json::from_str(&text).wrap_err_with(|| format!("POST {url} returned non-JSON: {}", &text[..text.len().min(400)]))?;
 		fs::write(&dst, &text)?;
 		Ok(json)

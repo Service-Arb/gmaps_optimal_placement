@@ -154,7 +154,11 @@ fn sweep(cfg: &PoiConfig, bbox: Bbox, key: Option<&str>, work: &Work) -> Result<
 
 	let mut found = Found::default();
 	for q in &cfg.queries {
-		descend(work, key, q, bbox, 0, &mut found)?;
+		// every answer that arrived is already on disk and the recursion is deterministic, so whatever
+		// stopped this — a daily quota above all — a rerun picks up where it stopped and pays only for
+		// what is still missing
+		descend(work, key, q, bbox, 0, &mut found).wrap_err_with(|| format!("sweeping {q:?}: a rerun resumes from here, and re-asks nothing already answered"))?;
+		eprintln!("  {q:?}: {} orderings, {} billed so far", found.obs.len(), work.billed());
 	}
 	let Found { raw, obs, censored } = found;
 	if !censored.is_empty() {
