@@ -130,6 +130,9 @@ async function main() {
     return {
       layers: document.querySelectorAll('#ctl select option').length,
       tierRows: document.querySelectorAll('#ctl .row').length,
+      cats: [...document.querySelectorAll('#ctl .cat')].map(d => [d.querySelector('label').textContent, d.querySelector('.sw').style.background]),
+      tiered: [...document.querySelectorAll('#ctl .row')].filter(r => r.querySelector('input[id^=tier]'))
+        .map(r => Number(r.querySelector('label').textContent.match(/\\((\\d+)\\)$/)[1])),
       ticks: [...document.querySelectorAll('#ticks span')].map(t => t.textContent).join(' '),
       note: document.querySelector('#ctl div.note').innerText.replace(/\\n/g, ' '),
       banner: document.querySelector('#banner')?.innerText ?? null,
@@ -145,8 +148,23 @@ async function main() {
   assert.equal(s.tierRows, 3, "one row per tier, plus hide-imputed");
   assert(s.note.includes("10446 cells"), `legend counts the grid: ${s.note}`);
   assert(s.painted > 100, "canvas actually painted");
+  // the colours are Google's categories, not the study's tiers, so the list is longer than `tier`
+  // is and no two entries share a swatch
+  assert(s.cats.length > 2, `the category list is the inventory's own: ${JSON.stringify(s.cats)}`);
+  assert.equal(new Set(s.cats.map(c => c[1])).size, s.cats.length, "every category gets its own colour");
+  const sum = v => v.reduce((a, b) => a + b, 0);
+  assert.equal(sum(s.cats.map(c => Number(c[0].match(/\((\d+)\)$/)[1]))), sum(s.tiered), "every competitor is filed under exactly one category");
   // a marker reaches the map a frame after the panel it belongs to, so this one settles like the rest
-  await expectMarkers(141, "140 competitor markers and the study's one candidate");
+  await expectMarkers(131, "130 competitor markers and the study's one candidate");
+
+  log("step: hover a competitor");
+  // the name, off the marker, in the same tooltip a cell uses — the native `title` is gone
+  const hover = await evaluate(`(() => { const m = document.querySelectorAll('#map [role=button]')[0];
+    const r = m.getBoundingClientRect();
+    m.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 }));
+    return new Promise(res => setTimeout(() => res(document.getElementById('tip')?.innerText ?? null), 400)); })()`);
+  log("tip:", hover);
+  assert(hover, "hovering a competitor names it");
 
   // a click drops a pin and opens its card — the card is what makes a yellow pin reachable at all.
   // 430 rather than 400: `#tabs` pushes the map down its own height, and 400 now lands on a marker
@@ -159,7 +177,7 @@ async function main() {
   log("---- card ----\n" + (card?.text ?? "(none)"));
   assert(card, "a click opens a card");
   assert.deepEqual(card.acts, ["✓", "⧉", "✕"], "a yellow pin can be kept, copied or dropped");
-  await expectMarkers(142, "the clicked pin is on the map");
+  await expectMarkers(132, "the clicked pin is on the map");
   assert(card.text.includes("Capture score"), "the card is a site report");
 
   log("step: promote");
@@ -173,9 +191,9 @@ async function main() {
   log("step: rank");
   // the green set survives both of the buttons that used to wipe it
   await evaluate(`${ctl("Rank top 10 sites")}.click()`);
-  await expectMarkers(152, "ranking adds ten yellow pins and keeps the two green ones");
+  await expectMarkers(142, "ranking adds ten yellow pins and keeps the two green ones");
   await evaluate(`${ctl("Clear pins")}.click()`);
-  await expectMarkers(142, "clearing takes the yellow pins and leaves the green ones");
+  await expectMarkers(132, "clearing takes the yellow pins and leaves the green ones");
 
   await evaluate(`${ctl("Compare")}.click()`);
   await sleep(800);
@@ -186,31 +204,31 @@ async function main() {
   log("step: reload");
   // it is still there after a restart of the page, because the server kept it
   await load();
-  await expectMarkers(142, "the promoted pin comes back green, the yellow ones do not");
+  await expectMarkers(132, "the promoted pin comes back green, the yellow ones do not");
 
   log("step: drop");
   // ✕ on a promoted pin: nothing to confirm, it was never an argument in the study file
-  await clickThrough(`document.querySelectorAll('#map [role=button]')[141]`);
+  await clickThrough(`document.querySelectorAll('#map [role=button]')[131]`);
   assert.equal((await evaluate(`document.querySelector('#report h4')?.textContent ?? ''`)).startsWith("B · " + PROMOTED), true, "the promoted pin opens its own card");
   await clickThrough(act("✕"));
   assert.deepEqual(dialogs, [], "dropping a pin this session promoted asks nothing");
   assert.deepEqual(pins()?.added, [], "dropping a promoted pin takes it out of the file");
-  await expectMarkers(141, "and off the map");
+  await expectMarkers(131, "and off the map");
 
   log("step: hide a study candidate");
   // ✕ on one the study file names is an argument with the document, so it is confirmed
-  await clickThrough(`document.querySelectorAll('#map [role=button]')[140]`);
+  await clickThrough(`document.querySelectorAll('#map [role=button]')[130]`);
   assert.equal((await evaluate(`document.querySelector('#report h4')?.textContent ?? ''`)).startsWith("A · VifNet"), true, "the study's candidate opens its own card");
   await clickThrough(act("✕"), "");
   assert.deepEqual(dialogs, ["confirm"], "hiding a candidate the study names is confirmed first");
   assert.deepEqual(pins()?.hidden, ["VifNet"], "the study file is untouched; the hiding lives beside it");
   await load();
-  await expectMarkers(140, "it stays hidden across a reload");
+  await expectMarkers(130, "it stays hidden across a reload");
 
   // the study file is still the seed: delete the diff and the candidate is back
   fs.rmSync(PINS);
   await load();
-  await expectMarkers(141, "deleting the pin file restores what the study declares");
+  await expectMarkers(131, "deleting the pin file restores what the study declares");
 
   // the CLI was given the two directories, so the pool is their whole product and the one open tab
   // is what the picker was pointed at; a pairing nobody asked for is built the first time a tab does
@@ -280,7 +298,7 @@ async function main() {
   await press("w");
   assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand"], "`w` closes the active tab");
   assert.equal(await layers(), 10, "and the panel is the surviving study's");
-  await expectMarkers(141, "so is the map");
+  await expectMarkers(131, "so is the map");
 
   assert.deepEqual(errors, [], "no uncaught exceptions");
   log("\nOK — all assertions passed");

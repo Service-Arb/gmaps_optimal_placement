@@ -13,7 +13,7 @@ const S = new WeakMap();
 /// `shell()` resolves this once the Maps bootstrap has run.
 const ready = () => window.__mapsReady ?? Promise.reject(new Error('the Maps bootstrap never ran'));
 
-export async function mount(el, lat, lng, zoom, onClick, onMove, onOut, onPin, onPoi) {
+export async function mount(el, lat, lng, zoom, onClick, onMove, onOut, onPin, onPoi, onOver) {
 	try {
 		if (S.has(el)) return null;
 		await ready();
@@ -24,7 +24,7 @@ export async function mount(el, lat, lng, zoom, onClick, onMove, onOut, onPin, o
 		});
 		const cv = document.createElement('canvas');
 		const s = {
-			map, cv, ctx: cv.getContext('2d'), onPin, onPoi,
+			map, cv, ctx: cv.getContext('2d'), onPin, onPoi, onOver, onOut,
 			ringX: null, ringY: null, colors: null, shown: null, opacity: 0.62,
 			markers: [], tiers: null, pins: new Map(), iw: new google.maps.InfoWindow(),
 		};
@@ -102,7 +102,8 @@ function paint(el, s) {
 
 /// The whole competitor inventory, replacing whatever is there. Each entry carries its tier index
 /// and its colour; the info window is presentation and stays here. A click also tells Rust which
-/// competitor it was, which is what the coverage layers are drawn about.
+/// competitor it was, which is what the coverage layers are drawn about, and a hover tells it the
+/// same thing — the native `title` is a second later and a different shape from the cell tooltip.
 export function competitors(el, json) {
 	const s = S.get(el);
 	if (!s) return;
@@ -110,7 +111,7 @@ export function competitors(el, json) {
 	s.markers = JSON.parse(json).map((c, i) => {
 		const scale = c.big ? 7 : 4.5;
 		const m = new google.maps.Marker({
-			position: { lat: c.lat, lng: c.lng }, title: c.name, zIndex: c.big ? 3 : 2,
+			position: { lat: c.lat, lng: c.lng }, zIndex: c.big ? 3 : 2,
 			label: c.n_rev ? { text: String(c.n_rev), className: 'nrev', color: '#fff', fontSize: '10px', fontWeight: '700' } : null,
 			icon: {
 				path: google.maps.SymbolPath.CIRCLE, fillColor: c.color, fillOpacity: 0.95,
@@ -120,6 +121,11 @@ export function competitors(el, json) {
 			},
 		});
 		m.ti = c.ti;
+		m.addListener('mouseover', e => {
+			const r = el.getBoundingClientRect();
+			s.onOver(i, e.domEvent.clientX - r.left, e.domEvent.clientY - r.top);
+		});
+		m.addListener('mouseout', () => s.onOut());
 		m.addListener('click', () => {
 			s.iw.setContent(`<div style="font:13px system-ui;max-width:250px;color:#111">
 				<b>${esc(c.name)}</b><br>${esc(c.addr)}<br>
