@@ -7,22 +7,18 @@
 
 Where should a service business open?
 
-Two Nix files describe it. A location gives an area and the statistical grid behind it; a trade —
-applied to that location — gives what counts as a competitor and how demand follows from the columns
-the grid publishes. `gmaps_optimal_placement` paints that demand under the competitors already on the
-ground and serves the map. How much any one competitor counts is fitted, not guessed:
-`gmaps_optimal_placement probe` asks Google the study's own queries from equal-demand points across the area,
-and `gmaps_optimal_placement fit` estimates what its ordering rewards. `gmaps_optimal_placement
-strength` is what says that estimate is worth painting: every candidate model cross-validated over
-the same orderings, and a refusal if counting every competitor the same does as well.
+One Nix file describes an area, a statistical grid, what counts as a competitor, and how demand
+follows from the columns that grid publishes. `gmaps_optimal_placement` paints that demand under the
+competitors already on the ground and writes one self-contained HTML map. How much any one
+competitor counts is fitted, not guessed: `gmaps_optimal_placement probe` asks Google the study's own queries
+from equal-demand points across the area, and `gmaps_optimal_placement fit` estimates what its ordering rewards.
 
-A trade also names groups of queries, and `gmaps_optimal_placement searches` charts how often each group is
+The same file can name groups of queries, and `gmaps_optimal_placement searches` charts how often each group is
 asked for over the trailing year — the map says where the people are, this says how many of them
 are looking for the thing.
 
-The question is the input: another city is a location file, another trade is a trade file, and every
-pairing of the two is a study. Neither is an edit to the code. A location on its own is a study too
-— the grid, and nothing a trade decides — and it is the one the Google Maps quota is not spent on.
+The question is the input: a different city, country or trade is an edit to the study document, not
+to the code.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the invariants, and
 [examples/](examples) for worked studies.
@@ -41,44 +37,20 @@ cargo install --path gmaps_optimal_placement
 
 ## Usage
 ```sh
-# Set your Google Maps API key. The server reads it; it never lands in a file.
+## Set your Google Maps API key. The server reads it; it never lands in a file.
 export GOOGLE_MAPS_KEY=...
 
-# Serve the map. A study is a trade applied to a location, and the two directories are all this
-# takes — the page picks the pairing, with a field per axis: type in either, Enter crosses, and
-# Ctrl+Enter opens it as a tab over one map. Press `t` for one more. Both flags default to what is
-# shown here. Bulk archives and API responses cache in $GMAPS_OPTIMAL_PLACEMENT_WORK (default
-# ./docs/.readme_assets/tmp/geo); candidates you promote from the map land in $XDG_DATA_HOME/gmaps_optimal_placement.
-gmaps_optimal_placement serve --trades examples/trades --locations examples/locations --open
+## Serve the map. Bulk archives and API responses cache in $GMAPS_OPTIMAL_PLACEMENT_WORK (default ./tmp/geo);
+## candidates you promote from the map land in $XDG_DATA_HOME/gmaps_optimal_placement.
+gmaps_optimal_placement serve examples/car_detailing_-_Clermont-Ferrand.nix --open
 
-# Name an axis as a file rather than a directory to narrow it; name both and the pairing is built
-# before the server starts, which is how a scripted run never meets the picker.
-gmaps_optimal_placement serve -t examples/trades/cleaning.nix -l examples/locations/Lyon.nix
+## Chart the monthly search volume of each query group. Set the credentials of the provider first:
+## GOOGLE_ADS_{DEVELOPER_TOKEN,CLIENT_ID,CLIENT_SECRET,REFRESH_TOKEN,CUSTOMER_ID}, or
+## DATAFORSEO_{LOGIN,PASSWORD}.
+gmaps_optimal_placement searches examples/car_detailing_-_Clermont-Ferrand.nix
 
-# The last row of the trade field is "no trade". Select it to see the city from the statistical grid
-# only. This map has no demand layer and no competitors, and it uses no Google Maps calls.
-
-# Chart the monthly search volume of each query group. Set the credentials of the provider first:
-# GOOGLE_ADS_{DEVELOPER_TOKEN,CLIENT_ID,CLIENT_SECRET,REFRESH_TOKEN,CUSTOMER_ID}, or
-# DATAFORSEO_{LOGIN,PASSWORD}. Each axis is picked through fzf.
-gmaps_optimal_placement searches -t examples/trades -l examples/locations
-
-# Show the schema of the study document.
+## Show the schema of the study document.
 gmaps_optimal_placement schema
-
-# Find the towns in a country that are worth a study. Count what a cadastre draws, per commune, and
-# divide by a column of the grid. Towns below the floor are not counted, and not downloaded.
-gmaps_optimal_placement misc france pool --per ind --floor 2000
-```
-
-From a checkout, `nix run` does the same and builds the wasm client first. Everything after `--` is
-the binary's own, so the two axes are the same flags, and paths are read from the repository root.
-
-```sh
-nix run .#open
-nix run .#open -- -l examples/locations/Lyon.nix
-nix run .#searches -- -t examples/trades/cleaning.nix
-nix run .#help
 ```
 
 ## Sources
