@@ -183,6 +183,14 @@ guess into authority. The worked examples are in `examples/`.
 - **A competitor sits at its registered address**, which understates a mobile operator's reach.
 - **Tiering is name-based.** A shop whose name says nothing about what it does is tiered on what its
   name does say.
+- **A Places *type* is not the category the map shows.** `primaryTypeDisplayName` is the Business
+  Profile category, of which there are thousands; `poi.included_type` takes a Places type, of which
+  Table A has 478, and there is no cleaning, detailing or handyman type among them. So the filter is
+  off by default, and what it costs when it is on was measured on the Clermont cache: `car_wash`
+  keeps 35 % of the tier-1 detailers, because 14 of 40 of them carry no primary type at all;
+  `service` keeps 92 % of the cleaners but filters only 23 % of the rows, so it saves almost nothing.
+  `plumber` is the case where the two line up. Turning it on is a claim that Google types this trade,
+  and the category list in the map panel is where that claim is checked.
 - **Every constant in a study is a guess with a sane magnitude**, not a fitted value. They are in
   the study file so they can be argued with. Competitor weight is the exception: it comes out of
   `rank`, and the three things below are what that estimate cannot settle.

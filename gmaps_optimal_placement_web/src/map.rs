@@ -14,8 +14,20 @@ use crate::{
 	tabs::{Keymap, Pool},
 };
 
-/// One per tier, in the study's own order. Sixth and beyond wrap.
-const TIER_COLORS: [&str; 5] = ["#ff2d55", "#00d0ff", "#ffb020", "#7ae77a", "#c78bff"];
+/// A Google category, as Google files it — not as the study's `tier` rules read it. The tiers are
+/// the study's argument about what competes; this is the evidence they were argued from, and the
+/// two disagreeing is worth being able to see.
+#[derive(Clone, PartialEq)]
+pub struct Category {
+	/// Places `primaryType`, which the colour is keyed by.
+	pub kind: String,
+	/// The Business Profile category Google displays. A place it typed as nothing is still on the
+	/// map and still says so.
+	pub label: String,
+	pub color: String,
+	/// Per tier, in the payload's order, so the panel can count only what is on screen.
+	pub counts: Vec<usize>,
+}
 
 /// One study, as the controls stood when its tab was last left. `activate` swaps this against the
 /// live signals; the map instance underneath is never rebuilt.
@@ -242,6 +254,7 @@ pub struct Heavy {
 pub struct Loaded {
 	pub layers: Vec<(String, String)>,
 	pub tier_counts: Vec<usize>,
+	pub categories: Vec<Category>,
 	pub imputed: usize,
 	/// How old the competitor inventory under this map is. `None` where it was bought on this run.
 	pub age_d: Option<f64>,
@@ -360,7 +373,6 @@ pub fn MapView() -> impl IntoView {
 							.enumerate()
 							.map(|(i, t)| {
 								let (name, count) = (t.name.clone(), l.tier_counts[i]);
-								let swatch = format!("background:{}", TIER_COLORS[i % TIER_COLORS.len()]);
 								view! {
 									<div class="row">
 										<input
@@ -371,10 +383,7 @@ pub fn MapView() -> impl IntoView {
 												s.tiers.update(|v| v[i].show = event_target_checked(&ev));
 											}
 										/>
-										<label for=format!("tier{i}")>
-											<span class="sw" style=swatch></span>
-											{format!(" {name} ({count})")}
-										</label>
+										<label for=format!("tier{i}")>{format!("{name} ({count})")}</label>
 									</div>
 									<label>
 										{format!("weight of one {} — ", t.name)}
@@ -402,6 +411,42 @@ pub fn MapView() -> impl IntoView {
 								}
 							})
 							.collect_view()
+					})
+			}}
+
+			// what Google filed each one as, which is what the markers are coloured by. The tiers above
+			// are the study's reading of these, and a category split across two of them is the study
+			// being asked to justify itself.
+			{move || {
+				let (loaded, tiers) = (s.loaded.get(), s.tiers.get());
+				let rows: Vec<_> = loaded?
+					.categories
+					.into_iter()
+					.filter_map(|c| {
+						let n: usize = c
+							.counts
+							.iter()
+							.zip(&tiers)
+							.filter(|(_, t)| t.show)
+							.map(|(n, _)| n)
+							.sum();
+						(n > 0)
+							.then(|| {
+								view! {
+									<div class="cat">
+										<span class="sw" style=format!("background:{}", c.color)></span>
+										<label>{format!("{} ({n})", c.label)}</label>
+									</div>
+								}
+							})
+					})
+					.collect();
+				(!rows.is_empty())
+					.then(|| {
+						view! {
+							<h4>"Google categories"</h4>
+							{rows}
+						}
 					})
 			}}
 
@@ -517,16 +562,47 @@ mod imp {
 
 #[cfg(feature = "hydrate")]
 mod imp {
-	use gmaps_optimal_placement_core::model::{LayerRef, LayerSpec, colorise};
+	use gmaps_optimal_placement_core::{
+		model::{LayerRef, LayerSpec, colorise},
+		payload::Trade,
+	};
 	use leptos::prelude::*;
 	use wasm_bindgen::{closure::WasmClosure, prelude::*};
 
-	use super::{Legend, State, TIER_COLORS, Tab, Tip};
+	use super::{Category, Legend, State, Tab, Tip};
 	use crate::{pins::Pin, tabs::Pool};
 
-	/// One per tier, in the study's own order. Sixth and beyond wrap.
 	const GREEN: &str = "#7cff8f";
 	const YELLOW: &str = "#ffd400";
+
+	/// Every category on the map, commonest first, each with the colour it is painted in.
+	/// Golden-angle hues: neighbours in the list land far apart on the wheel however many a city
+	/// turns out to have.
+	fn categories(trade: &Trade) -> Vec<Category> {
+		let mut out: Vec<Category> = Vec::new();
+		for p in &trade.pois {
+			let ti = trade.tiers.iter().position(|t| t.name == p.poi.tier).expect("the model rejected a payload whose tiers disagree");
+			let i = out.iter().position(|c| c.kind == p.poi.kind).unwrap_or_else(|| {
+				out.push(Category {
+					kind: p.poi.kind.clone(),
+					label: match (p.poi.kind_label.as_str(), p.poi.kind.as_str()) {
+						("", "") => "no category".to_owned(),
+						("", k) => k.to_owned(),
+						(l, _) => l.to_owned(),
+					},
+					color: String::new(),
+					counts: vec![0; trade.tiers.len()],
+				});
+				out.len() - 1
+			});
+			out[i].counts[ti] += 1;
+		}
+		out.sort_by_key(|c| std::cmp::Reverse(c.counts.iter().sum::<usize>()));
+		for (i, c) in out.iter_mut().enumerate() {
+			c.color = format!("hsl({:.0},72%,58%)", (i as f64 * 137.508) % 360.);
+		}
+		out
+	}
 
 	/// What a redraw needs, once the controls have moved. Split from the payload so the cheap effects
 	/// never pay for a pressure sweep.
@@ -581,6 +657,7 @@ mod imp {
 			on_out: &js_sys::Function,
 			on_pin: &js_sys::Function,
 			on_poi: &js_sys::Function,
+			on_over: &js_sys::Function,
 		) -> JsValue;
 		#[wasm_bindgen(js_name = cells)]
 		fn cells_js(el: &web_sys::HtmlElement, ring_x: &[f64], ring_y: &[f64], colors: &[u8], shown: &[u8]);
@@ -805,6 +882,7 @@ mod imp {
 				.iter()
 				.flat_map(|t| t.tiers.iter().map(|x| t.pois.iter().filter(|p| p.poi.tier == x.name).count()))
 				.collect(),
+			categories: m.payload.trade.iter().flat_map(categories).collect(),
 			imputed: m.payload.imputed.iter().filter(|&&i| i == 1).count(),
 			age_d: m.payload.trade.as_ref().and_then(|t| t.inventory_age_d),
 			traded: m.traded(),
@@ -995,20 +1073,22 @@ mod imp {
 		}
 	}
 
-	/// The whole competitor inventory, as `map_core.js` wants it.
+	/// The whole competitor inventory, as `map_core.js` wants it. Colour says Google's category, size
+	/// says the study's tier. Two questions, and reading one off the other is exactly the mistake the
+	/// category list is there to make visible.
 	fn competitors(model: &gmaps_optimal_placement_core::Model) -> String {
 		let Some(trade) = &model.payload.trade else { return "[]".to_owned() };
+		let cats = categories(trade);
 		let out: Vec<serde_json::Value> = trade
 			.pois
 			.iter()
 			.map(|p| {
 				let ti = trade.tiers.iter().position(|t| t.name == p.poi.tier).expect("the model rejected a payload whose tiers disagree");
+				let c = cats.iter().find(|c| c.kind == p.poi.kind).expect("the list was built from these same pois");
 				serde_json::json!({
 					"lat": p.poi.lat, "lng": p.poi.lng, "name": p.poi.name, "addr": p.poi.addr,
-					"kind": if p.poi.kind_label.is_empty() { &p.poi.kind } else { &p.poi.kind_label },
-					"tier": p.poi.tier, "rating": p.poi.rating, "n_rev": p.poi.n_rev,
-					"web": p.poi.web, "tel": p.poi.tel, "ti": ti, "big": ti == 0,
-					"color": TIER_COLORS[ti % TIER_COLORS.len()],
+					"kind": c.label, "tier": p.poi.tier, "rating": p.poi.rating, "n_rev": p.poi.n_rev,
+					"web": p.poi.web, "tel": p.poi.tel, "ti": ti, "big": ti == 0, "color": c.color,
 				})
 			})
 			.collect();
@@ -1048,9 +1128,15 @@ mod imp {
 		let on_pin = leak(Closure::<dyn Fn(String)>::new(move |id: String| s.open(&id)));
 		// the marker order is the payload's own, so the index needs no lookup
 		let on_poi = leak(Closure::<dyn Fn(usize)>::new(move |i: usize| s.focus.set(i)));
+		// a marker eats the map's `mousemove`, so without this the tooltip a cell was showing simply
+		// stops on whatever it last said
+		let on_over = leak(Closure::<dyn Fn(usize, f64, f64)>::new(move |i: usize, x: f64, y: f64| {
+			let text = s.heavy.with_value(|h| Some(h.model.as_ref()?.payload.trade.as_ref()?.pois[i].poi.name.clone()));
+			s.tip.set(text.map(|text| Tip { text, x, y }));
+		}));
 
 		let (c, zoom) = (model.payload.center, model.payload.zoom);
-		if let Some(msg) = mount_js(el, c[0], c[1], zoom, &on_click, &on_move, &on_out, &on_pin, &on_poi).await.as_string() {
+		if let Some(msg) = mount_js(el, c[0], c[1], zoom, &on_click, &on_move, &on_out, &on_pin, &on_poi, &on_over).await.as_string() {
 			s.banner.set(Some(msg));
 			return false;
 		}

@@ -64,6 +64,13 @@ pub struct Tier {
 pub struct PoiConfig {
 	pub source: PoiSource,
 	pub queries: Vec<String>,
+	/// One Places *type*, which is a coarser taxonomy than the Business Profile category the map
+	/// displays: there is no `house_cleaning_service`, and a third of the cleaning firms Google
+	/// returns carry no primary type at all. Set, it is forced — `strictTypeFiltering` — so a tile
+	/// saturates on competitors rather than on the retail the query drags in, at the price of every
+	/// competitor Google never typed. Unset is the honest default; see `docs/ARCHITECTURE.md`.
+	#[serde(default)]
+	pub included_type: Option<String>,
 	/// First match wins; anything matching none is not a competitor. `types` here hits any category
 	/// the source lists — a supermarket forecourt is typed `gas_station` and carries `car_wash`.
 	#[serde(rename = "tier")]
@@ -166,7 +173,8 @@ fn sweep(cfg: &PoiConfig, bbox: Bbox, key: Option<&str>, work: &Work) -> Result<
 		// every answer that arrived is already on disk and the recursion is deterministic, so whatever
 		// stopped this — a daily quota above all — a rerun picks up where it stopped and pays only for
 		// what is still missing
-		descend(work, key, q, bbox, 0, &mut found).wrap_err_with(|| format!("sweeping {q:?}: a rerun resumes from here, and re-asks nothing already answered"))?;
+		descend(work, key, q, cfg.included_type.as_deref(), bbox, 0, &mut found)
+			.wrap_err_with(|| format!("sweeping {q:?}: a rerun resumes from here, and re-asks nothing already answered"))?;
 		// new, not returned: the queries overlap by design, and what the eighth one adds over the seven
 		// before it is what says whether it earns its calls
 		eprintln!(
@@ -245,13 +253,20 @@ fn sweep(cfg: &PoiConfig, bbox: Bbox, key: Option<&str>, work: &Work) -> Result<
 ///
 /// Not a study's to state: the cap bites on competitor density, which is a fact about the trade and
 /// the ground together, and which no document knows before it asks.
-fn descend(work: &Work, key: Option<&str>, query: &str, tile: Bbox, depth: u32, found: &mut Found) -> Result<()> {
+fn descend(work: &Work, key: Option<&str>, query: &str, typed: Option<&str>, tile: Bbox, depth: u32, found: &mut Found) -> Result<()> {
 	// the cache key is the body verbatim, so a tile's corners may not be re-associated
 	let rect = serde_json::json!({
 		"low":  {"latitude": tile.lat[0], "longitude": tile.lon[0]},
 		"high": {"latitude": tile.lat[1], "longitude": tile.lon[1]},
 	});
-	let body = serde_json::json!({"textQuery": query, "pageSize": 20, "locationRestriction": {"rectangle": rect}});
+	let mut body = serde_json::json!({"textQuery": query, "pageSize": 20, "locationRestriction": {"rectangle": rect}});
+	// absent rather than null when unset: the body is the cache key, and an untyped sweep already
+	// paid for these answers. Places rejects a type outside Table A by name, which is the only list
+	// of them worth keeping.
+	if let Some(t) = typed {
+		body["includedType"] = serde_json::Value::String(t.to_owned());
+		body["strictTypeFiltering"] = serde_json::Value::Bool(true);
+	}
 	// asked here rather than inferred from an empty page: a tile nobody harvested and one Google
 	// returned nothing for read the same out of `search_text`, and only the first would cost anything
 	if work.refreshing() || work.cached(SEARCH_TEXT, &body)?.is_none() {
@@ -285,7 +300,7 @@ fn descend(work: &Work, key: Option<&str>, query: &str, tile: Bbox, depth: u32, 
 	let (mid_lat, mid_lon) = ((tile.lat[0] + tile.lat[1]) / 2., (tile.lon[0] + tile.lon[1]) / 2.);
 	for lat in [[tile.lat[0], mid_lat], [mid_lat, tile.lat[1]]] {
 		for lon in [[tile.lon[0], mid_lon], [mid_lon, tile.lon[1]]] {
-			descend(work, key, query, Bbox { lat, lon }, depth + 1, found)?;
+			descend(work, key, query, typed, Bbox { lat, lon }, depth + 1, found)?;
 		}
 	}
 	Ok(())
