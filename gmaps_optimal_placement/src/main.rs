@@ -11,13 +11,26 @@ struct Cli {
 	cmd: Cmd,
 }
 
+/// The two axes a study is a point on. Either may be a single `*.nix` instead of a directory, which
+/// is how a scripted run names one without meeting a picker.
+#[derive(Clone, clap::Args)]
+struct Pair {
+	/// What is being sold: queries, tiering, the demand model, the ranking terms
+	#[arg(default_value = "examples/trades")]
+	trades: PathBuf,
+	/// Where: the frame, the statistics office behind it, the premises in mind
+	#[arg(default_value = "examples/locations")]
+	locations: PathBuf,
+}
+
 #[derive(Subcommand)]
 enum Cmd {
-	/// Where the people are: demand under the competitors, as a map served from here. A directory
-	/// opens the page on its own picker; a file opens as the one tab, already built
+	/// Where the people are: demand under the competitors, as a map served from here. The page picks
+	/// a trade and a city out of the two directories; naming both as files opens the one tab, already
+	/// built
 	Serve {
-		#[arg(default_value = "examples/studies")]
-		config: PathBuf,
+		#[command(flatten)]
+		at: Pair,
 		#[arg(short, long, default_value_t = 8731)]
 		port: u16,
 		/// Point the desktop browser at it once it is up
@@ -26,7 +39,8 @@ enum Cmd {
 	},
 	/// How many people ask for it: monthly volume per query group, as one HTML chart
 	Searches {
-		config: PathBuf,
+		#[command(flatten)]
+		at: Pair,
 		/// Defaults to `<work dir>/out/<study name>-searches.html`
 		#[arg(short, long)]
 		out: Option<PathBuf>,
@@ -34,17 +48,18 @@ enum Cmd {
 	/// Ask Google the study's terms from equal-demand nodes, so the ranking model has orderings a
 	/// searcher could have produced
 	Probe {
-		config: PathBuf,
+		#[command(flatten)]
+		at: Pair,
 		/// Print the node placement and the call budget, spend nothing
 		#[arg(long)]
 		dry_run: bool,
 	},
 	/// Refit the ranking model over every ordering in the work dir, and print the table that goes
-	/// into `gmaps_optimal_placement_core::rank::COEF`. How Google ranks is one mechanism, so pass every study
-	/// there is evidence from
+	/// into `gmaps_optimal_placement_core::rank::COEF`. How Google ranks is one mechanism, so this takes the
+	/// whole product and reads whatever each pairing has already collected
 	Fit {
-		#[arg(required = true)]
-		config: Vec<PathBuf>,
+		#[command(flatten)]
+		at: Pair,
 	},
 	/// Which towns in a country are worth a study: something the cadastre draws, counted per
 	/// administrative unit and divided by whatever the statistical grid publishes, as one HTML map
@@ -74,40 +89,46 @@ fn main() -> Result<()> {
 			println!("{}", serde_json::to_string_pretty(&schemars::schema_for!(gmaps_optimal_placement::Study))?);
 			Ok(())
 		}
-		Cmd::Serve { config, port, open } => {
-			// the page picks out of a directory, so `fzf` is not one of two pickers to learn. A named
-			// file is built here instead: its statistics print, and a study that will not build fails
-			// before the listener binds
-			let (dir, prebuilt) = match config.is_dir() {
-				true => (config, Vec::new()),
-				false => {
-					let payload = gmaps_optimal_placement::load(&config)?.build(&work)?;
+		Cmd::Serve { at, port, open } => {
+			// the page picks out of the two directories, so `fzf` is not one of two pickers to learn. A
+			// pair named as files is built here instead: its statistics print, and a study that will not
+			// build fails before the listener binds
+			let (trades, locations) = (gmaps_optimal_placement::files(&at.trades)?, gmaps_optimal_placement::files(&at.locations)?);
+			let prebuilt = match (trades.as_slice(), locations.as_slice()) {
+				([trade], [location]) => {
+					let payload = gmaps_optimal_placement::load(trade, location)?.build(&work)?;
 					report(gmaps_optimal_placement::stats(&payload));
-					let one = vec![(stem(&config), serde_json::to_string(&payload)?)];
-					(config.parent().unwrap_or(&config).to_owned(), one)
+					vec![(
+						gmaps_optimal_placement::stem(trade).to_owned(),
+						gmaps_optimal_placement::stem(location).to_owned(),
+						serde_json::to_string(&payload)?,
+					)]
 				}
+				_ => Vec::new(),
 			};
 			// the work dir rather than `work` itself: `Work` holds a `Cell`, and the server calls this
 			// from whichever blocking thread a tab's first request landed on
-			let at = work.path().to_owned();
-			let build = std::sync::Arc::new(move |p: &std::path::Path| {
-				let payload = gmaps_optimal_placement::load(p)?.build(&Work::at(at.clone()))?;
+			let dir = work.path().to_owned();
+			let build = std::sync::Arc::new(move |trade: &std::path::Path, location: &std::path::Path| {
+				let payload = gmaps_optimal_placement::load(trade, location)?.build(&Work::at(dir.clone()))?;
 				Ok(serde_json::to_string(&payload)?)
 			});
-			gmaps_optimal_placement_web::serve::serve(dir, prebuilt, build, SocketAddr::from(([127, 0, 0, 1], port)), open)
+			gmaps_optimal_placement_web::serve::serve(trades, locations, prebuilt, build, SocketAddr::from(([127, 0, 0, 1], port)), open)
 		}
-		Cmd::Probe { config, dry_run } => {
-			gmaps_optimal_placement::load(&gmaps_optimal_placement::pick(&config)?)?.probe(&work, dry_run)?;
+		Cmd::Probe { at, dry_run } => {
+			let (trade, location) = (gmaps_optimal_placement::pick(&at.trades)?, gmaps_optimal_placement::pick(&at.locations)?);
+			gmaps_optimal_placement::load(&trade, &location)?.probe(&work, dry_run)?;
 			Ok(())
 		}
-		Cmd::Fit { config } => {
-			// no picker: how Google ranks is one mechanism, so a directory contributes every ordering in it
-			let paths = config
+		Cmd::Fit { at } => {
+			// no picker: how Google ranks is one mechanism, so every pairing that has been harvested
+			// contributes. `Study::observations` reads the work dir and never the network, so a pairing
+			// nobody ever built costs nothing and says nothing
+			let (trades, locations) = (gmaps_optimal_placement::files(&at.trades)?, gmaps_optimal_placement::files(&at.locations)?);
+			let studies = trades
 				.iter()
-				.map(|p| if p.is_dir() { gmaps_optimal_placement::studies(p) } else { Ok(vec![p.clone()]) })
-				.collect::<Result<Vec<_>>>()?
-				.concat();
-			let studies = paths.iter().map(|c| gmaps_optimal_placement::load(c)).collect::<Result<Vec<_>>>()?;
+				.flat_map(|t| locations.iter().map(move |l| gmaps_optimal_placement::load(t, l)))
+				.collect::<Result<Vec<_>>>()?;
 			let lambda: Vec<f64> = studies.iter().map(|s| s.model.lambda_m).collect();
 			let fit: gmaps_optimal_placement::fit::Fit = studies.iter().map(|s| s.observations(&work)).collect::<Result<Vec<_>>>()?.into_iter().collect();
 			report(fit.stats(&lambda));
@@ -118,17 +139,14 @@ fn main() -> Result<()> {
 			report(compiled.stats());
 			write(out.unwrap_or_else(|| work.path().join("out").join(format!("{}.html", compiled.name()))), &compiled.render()?)
 		}
-		Cmd::Searches { config, out } => {
-			let payload = gmaps_optimal_placement::load(&gmaps_optimal_placement::pick(&config)?)?.searches(&work)?;
+		Cmd::Searches { at, out } => {
+			let (trade, location) = (gmaps_optimal_placement::pick(&at.trades)?, gmaps_optimal_placement::pick(&at.locations)?);
+			let payload = gmaps_optimal_placement::load(&trade, &location)?.searches(&work)?;
 			report(gmaps_optimal_placement::search_stats(&payload));
 			let html = gmaps_optimal_placement::render::render_searches(&payload)?;
 			write(out.unwrap_or_else(|| work.path().join("out").join(format!("{}-searches.html", payload.name))), &html)
 		}
 	}
-}
-
-fn stem(p: &std::path::Path) -> String {
-	p.file_stem().expect("a study path has a stem").to_string_lossy().into_owned()
 }
 
 fn write(out: PathBuf, html: &str) -> Result<()> {

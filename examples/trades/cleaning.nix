@@ -1,8 +1,7 @@
-let lyon = import ../_Lyon.nix; in
+/* Domestic and commercial cleaning, over whichever city is handed in. */
+loc:
 {
-  name = "cleaning_-_Lyon";
-
-  inherit (lyon) area grid;
+  inherit (loc) area grid candidate;
 
   poi = {
     source = "google_places";
@@ -16,9 +15,6 @@ let lyon = import ../_Lyon.nix; in
       "nettoyage fin de chantier"
       "nettoyage vitres"
     ];
-    # One text search returns 60 at most, and Lyon carries four times Clermont's trade in two thirds
-    # of the frame. At 6 the tile is ~5 km across and holds about as many firms as a Clermont third.
-    tiles = 6;
 
     # A cleaning firm is direct competition; a services-à-la-personne agency selling childcare and
     # gardening alongside the ménage hour is not who the search lands on.
@@ -48,16 +44,19 @@ let lyon = import ../_Lyon.nix; in
 
   # Square metres, not households: what is bought is hours, and hours follow floor area. That the
   # house outweighs the flat then needs no coefficient — INSEE already measured it.
-  column = lyon.column ++ [
+  column = loc.column ++ [
     { name = "senior_share"; expr = "(ind_65_79 + ind_80p) / max(ind, 1)"; }
   ];
 
-  # Same trade, same model as Clermont, so the two maps are readable against each other.
+  # Nobody has to hire a cleaner, so income bites nearly as hard as it does on detailing — the 50 %
+  # crédit d'impôt is what keeps the exponent under it. The senior term is the other half of the
+  # market: aide ménagère, part-funded by the APA, and not chosen on price.
   model = {
     demand = "men_surf * (0.7 + senior_share) * (max(nv, 4000) / 22000) ^ 1.5";
-    # The cleaner drives to the customer and does it again every week. Shorter than Clermont's 3 km:
-    # the same half-hour of unpaid commute crosses far less of Lyon.
-    lambda_m = 2200;
+    # The cleaner drives to the customer and does it again every week, so the unpaid commute is
+    # priced five times over — a tighter catchment than the plumber's one-off callout. Metres, not
+    # minutes: a denser city is not a different trade, and the slider is right there.
+    lambda_m = 3000;
   };
 
   # Not `poi.queries`: those name the trade the way the trade names itself, which is exactly the
@@ -65,17 +64,14 @@ let lyon = import ../_Lyon.nix; in
   # that is what the household types.
   rank = {
     nodes = 32;
-    radius_m = 3000;
     term = [
       { text = "femme de ménage"; weight = 1.0; }
-      # Heavier than in Clermont: Part-Dieu, Confluence and Gerland put an office behind a much larger
-      # share of the hours sold here.
-      { text = "nettoyage bureaux"; weight = 0.8; }
+      { text = "nettoyage bureaux"; weight = 0.6; }
       { text = "nettoyage fin de chantier"; weight = 0.3; }
     ];
   };
 
-  layer = lyon.layer ++ [
+  layer = loc.layer ++ [
     {
       name = "Dwelling floor area (m²)";
       expr = "men_surf";
@@ -92,16 +88,11 @@ let lyon = import ../_Lyon.nix; in
       expr = "ind_65_79 + ind_80p";
       note = "The half of the market that buys aide ménagère rather than a cleaner, and buys it every week.";
     }
-    {
-      name = "Households in flats";
-      expr = "men_coll";
-      note = "Three quarters of the stock here. The parties communes behind them are let by a syndic, not by the household on the map.";
-    }
   ];
 
   # "femme de ménage" is searched by the household hiring one and by the woman looking for the job in
   # roughly the same breath, so this group lives or dies on `drop`.
-  searches = lyon.searches // {
+  searches = loc.searches // {
     group = [
       {
         name = "ménage";

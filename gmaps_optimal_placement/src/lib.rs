@@ -94,9 +94,9 @@ impl Study {
 	/// it has already been run. Reads the work dir, never the network.
 	pub fn observations(&self, work: &Work) -> Result<(Vec<core::rank::Obs>, (f64, f64))> {
 		let cells = self.cells(work)?;
-		let inv = poi::load(&self.poi, self.area.bbox, work)?;
+		let inv = poi::cached(&self.poi, self.area.bbox, work)?;
 		let mut obs = inv.obs;
-		let probed = probe::cached(work, &probe::plan(&at(&self.nodes(&cells)?), &self.terms(), self.rank.radius_m))?;
+		let probed = probe::cached(work, &probe::plan(&at(&self.nodes(&cells)?), &self.terms(), self.radius_m()))?;
 		eprintln!("{}: {} orderings from the inventory sweep, {} from the probe", self.name, obs.len(), probed.len());
 		obs.extend(probed);
 		let places: Vec<String> = cells.grid.cells.iter().map(|c| c.place.clone()).collect();
@@ -105,11 +105,12 @@ impl Study {
 
 	pub fn probe(&self, work: &Work, dry: bool) -> Result<Vec<Ranking>> {
 		let nodes = self.nodes(&self.cells(work)?)?;
-		let plan = probe::plan(&at(&nodes), &self.terms(), self.rank.radius_m);
+		let plan = probe::plan(&at(&nodes), &self.terms(), self.radius_m());
 		if dry {
 			for n in &nodes {
 				eprintln!("  {:.5}, {:.5}   {:.1}% of demand", n.at[0], n.at[1], 100. * n.share);
 			}
+			eprintln!("{} nodes, biased {:.1} km", nodes.len(), self.radius_m() / 1000.);
 			eprintln!("{} searches, one call each: {} Text Search Essentials", plan.len(), plan.len());
 			return Ok(Vec::new());
 		}
@@ -120,6 +121,17 @@ impl Study {
 
 	fn terms(&self) -> Vec<String> {
 		self.rank.terms.iter().map(|t| t.text.clone()).collect()
+	}
+
+	/// The `locationBias` circle: one stratum's worth of ground, as a circle. `rank.nodes` cuts the
+	/// frame into equal shares of demand, so this is how far a searcher standing at one of them is
+	/// from its edge on average — which is the distance the coefficient is identified over. Not a
+	/// study's to state: it needs the frame and the node count, and those sit on opposite axes.
+	fn radius_m(&self) -> f64 {
+		let b = self.area.bbox;
+		let lat_m = (b.lat[1] - b.lat[0]) * 111_320.;
+		let lon_m = (b.lon[1] - b.lon[0]) * 111_320. * ((b.lat[0] + b.lat[1]) / 2.).to_radians().cos();
+		(lat_m * lon_m / self.rank.nodes as f64 / std::f64::consts::PI).sqrt()
 	}
 
 	fn nodes(&self, cells: &Cells) -> Result<Vec<rank::Node>> {
@@ -273,35 +285,46 @@ pub fn fold(group: &Group, ideas: Vec<Keyword>) -> Result<(Vec<String>, GroupOut
 		},
 	))
 }
-/// Every `*.nix` directly under `dir`, in file-stem order.
-pub fn studies(dir: &Path) -> Result<Vec<PathBuf>> {
-	let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
-		.wrap_err_with(|| format!("reading {}", dir.display()))?
+/// Every `*.nix` directly under `dir`, in file-stem order. A file is itself, so one axis of the
+/// product can be named on the command line while the other stays a directory.
+pub fn files(path: &Path) -> Result<Vec<PathBuf>> {
+	if path.is_file() {
+		return Ok(vec![path.to_owned()]);
+	}
+	let mut out: Vec<PathBuf> = std::fs::read_dir(path)
+		.wrap_err_with(|| format!("reading {}", path.display()))?
 		.map(|e| Ok(e?.path()))
 		.collect::<Result<Vec<_>>>()?
 		.into_iter()
 		.filter(|p| p.extension().is_some_and(|e| e == "nix"))
 		.collect();
 	out.sort_by_key(|p| p.file_stem().expect("a *.nix path has a stem").to_owned());
+	ensure!(!out.is_empty(), "no *.nix under {}", path.display());
 	Ok(out)
 }
 
-/// The study a one-artifact subcommand works on. A directory is offered through `fzf`; a file is
+/// The stem, which is half a study's name and the whole of what a picker shows.
+pub fn stem(p: &Path) -> &str {
+	p.file_stem().and_then(|s| s.to_str()).expect("a study path is UTF-8 with a stem")
+}
+
+/// One of an axis, for a one-artifact subcommand. A directory is offered through `fzf`; a file is
 /// itself, so a scripted run never opens a picker. `serve` does not come here — the page it serves
 /// has a picker of its own, and two pickers over one directory is one too many.
 pub fn pick(path: &Path) -> Result<PathBuf> {
-	if path.is_file() {
-		return Ok(path.to_owned());
+	let found = files(path)?;
+	if let [only] = found.as_slice() {
+		return Ok(only.clone());
 	}
-	let found = studies(path)?;
-	ensure!(!found.is_empty(), "no study under {}", path.display());
-	let stems: Vec<&str> = found.iter().map(|p| p.file_stem().and_then(|s| s.to_str()).expect("a study path is UTF-8")).collect();
+	let stems: Vec<&str> = found.iter().map(|p| stem(p)).collect();
 
 	let mut fzf = std::process::Command::new("fzf")
+		.arg("--prompt")
+		.arg(format!("{}> ", path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()))
 		.stdin(std::process::Stdio::piped())
 		.stdout(std::process::Stdio::piped())
 		.spawn()
-		.wrap_err("spawning `fzf` — choosing among a directory of studies needs it on PATH")?;
+		.wrap_err("spawning `fzf` — choosing among a directory needs it on PATH")?;
 	let mut sink = fzf.stdin.take().expect("stdin is piped");
 	std::io::Write::write_all(&mut sink, stems.join("\n").as_bytes())?;
 	drop(sink);
@@ -312,22 +335,35 @@ pub fn pick(path: &Path) -> Result<PathBuf> {
 	let i = stems
 		.iter()
 		.position(|o| *o == picked)
-		.ok_or_else(|| eyre::eyre!("fzf returned {picked:?}, which is not a study under {}", path.display()))?;
+		.ok_or_else(|| eyre::eyre!("fzf returned {picked:?}, which is nothing under {}", path.display()))?;
 	Ok(found[i].clone())
 }
 
-pub fn load(path: &Path) -> Result<Study> {
+/// A trade applied to a location. The trade file is a function of the location's attrset, which is
+/// what lets the frame and the statistics office it publishes be stated once per city rather than
+/// once per city and trade.
+pub fn load(trade: &Path, location: &Path) -> Result<Study> {
+	let (trade, location) = (abs(trade)?, abs(location)?);
+	let expr = format!("import {} (import {})", trade.display(), location.display());
+	// `--impure` for the absolute paths: pure evaluation only admits a path it was handed as the
+	// root, and the root here is a pair
 	let out = std::process::Command::new("nix")
-		.args(["eval", "--json", "--file"])
-		.arg(path)
+		.args(["eval", "--impure", "--json", "--expr", &expr])
 		.output()
 		.wrap_err("running `nix eval` — a study is a Nix expression, so nix must be on PATH")?;
-	ensure!(out.status.success(), "evaluating {}:\n{}", path.display(), String::from_utf8_lossy(&out.stderr).trim());
-	let study: Study = serde_json::from_slice(&out.stdout).wrap_err_with(|| format!("parsing {}", path.display()))?;
+	ensure!(out.status.success(), "evaluating {expr}:\n{}", String::from_utf8_lossy(&out.stderr).trim());
+	let mut study: Study = serde_json::from_slice(&out.stdout).wrap_err_with(|| format!("parsing {expr}"))?;
+	study.name = format!("{}_-_{}", stem(&trade), stem(&location));
 	if study.layers.is_empty() {
-		bail!("{} declares no [[layer]]", path.display());
+		bail!("{} declares no [[layer]]", study.name);
 	}
 	Ok(study)
+}
+
+/// `nix eval --expr` resolves a bare path against the invocation directory, and the server builds
+/// from whichever thread a request landed on.
+fn abs(p: &Path) -> Result<PathBuf> {
+	std::fs::canonicalize(p).wrap_err_with(|| format!("{} does not exist", p.display()))
 }
 /// Summary statistics, so a model change that moves numbers is visible rather than silent.
 pub fn stats(p: &Payload) -> IndexMap<String, String> {

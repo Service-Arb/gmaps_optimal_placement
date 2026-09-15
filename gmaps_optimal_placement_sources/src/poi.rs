@@ -13,6 +13,13 @@ pub const SEARCH_TEXT: &str = "https://places.googleapis.com/v1/places:searchTex
 /// The map displays all three.
 const FIELDS: &str = "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,\
 	places.types,places.primaryType,places.primaryTypeDisplayName,places.businessStatus,places.websiteUri,places.nationalPhoneNumber,nextPageToken";
+/// Three pages of twenty is all one text search will hand back, so a tile that comes back at this
+/// has more in it than it said.
+const CAP: usize = 60;
+/// How far a saturated tile may be quartered. Over a city frame the floor is a couple of
+/// kilometres, and a query still at the cap down there is reported rather than passed off as the
+/// whole inventory.
+const DEPTH: u32 = 3;
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum PoiSource {
 	#[serde(rename = "google_places")]
@@ -57,8 +64,6 @@ pub struct Tier {
 pub struct PoiConfig {
 	pub source: PoiSource,
 	pub queries: Vec<String>,
-	/// The bbox is searched as `tiles` x `tiles` rectangles: one text search returns at most 60.
-	pub tiles: u32,
 	/// First match wins; anything matching none is not a competitor. `types` here hits any category
 	/// the source lists — a supermarket forecourt is typed `gas_station` and carries `car_wash`.
 	#[serde(rename = "tier")]
@@ -96,7 +101,11 @@ pub struct Inventory {
 
 /// One text search, paged, in rank order. The body and the field mask are the caller's, because
 /// they are what decides the SKU.
-pub fn search_text(work: &Work, key: &str, body: &serde_json::Value, mask: &str, pages: usize) -> Result<Vec<(String, serde_json::Value)>> {
+///
+/// No key is the read-only mode: pages come out of the work dir and the first miss ends the search.
+/// A caller holding no key cannot buy, which is what lets the fit replay a sweep rather than pay
+/// for one.
+pub fn search_text(work: &Work, key: Option<&str>, body: &serde_json::Value, mask: &str, pages: usize) -> Result<Vec<(String, serde_json::Value)>> {
 	let mut out = Vec::new();
 	let mut token: Option<String> = None;
 	for _ in 0..pages {
@@ -104,7 +113,13 @@ pub fn search_text(work: &Work, key: &str, body: &serde_json::Value, mask: &str,
 		if let Some(t) = &token {
 			body["pageToken"] = serde_json::Value::String(t.clone());
 		}
-		let res = work.cached_post(SEARCH_TEXT, &body, &[("X-Goog-Api-Key", key), ("X-Goog-FieldMask", mask)])?;
+		let res = match key {
+			Some(k) => work.cached_post(SEARCH_TEXT, &body, &[("X-Goog-Api-Key", k), ("X-Goog-FieldMask", mask)])?,
+			None => match work.cached(SEARCH_TEXT, &body)? {
+				Some(hit) => hit,
+				None => break,
+			},
+		};
 		if let Some(e) = res.get("error") {
 			bail!("Places text search {}: {e}", body["textQuery"]);
 		}
@@ -121,42 +136,34 @@ pub fn search_text(work: &Work, key: &str, body: &serde_json::Value, mask: &str,
 }
 
 pub fn load(cfg: &PoiConfig, bbox: Bbox, work: &Work) -> Result<Inventory> {
-	let PoiSource::GooglePlaces = cfg.source;
 	let key = std::env::var("GOOGLE_MAPS_KEY").wrap_err("GOOGLE_MAPS_KEY is not set")?;
-	ensure!(cfg.tiles > 0, "poi.tiles must be at least 1");
+	sweep(cfg, bbox, Some(&key), work)
+}
+
+/// The same sweep, restricted to what the work dir already holds. A pairing nobody ever harvested
+/// yields nothing, which is how a refit reads evidence without turning into a purchase.
+pub fn cached(cfg: &PoiConfig, bbox: Bbox, work: &Work) -> Result<Inventory> {
+	sweep(cfg, bbox, None, work)
+}
+
+fn sweep(cfg: &PoiConfig, bbox: Bbox, key: Option<&str>, work: &Work) -> Result<Inventory> {
+	let PoiSource::GooglePlaces = cfg.source;
 	let drop = cfg.drop.as_ref().map(MatchSpec::compile).transpose()?;
 	let tiers: Vec<(&Tier, Matcher)> = cfg.tiers.iter().map(|t| Ok((t, t.spec.compile()?))).collect::<Result<_>>()?;
 	ensure!(!tiers.is_empty(), "at least one [[poi.tier]] is needed to say what a competitor is");
 
-	let mut raw: IndexMap<String, serde_json::Value> = IndexMap::new();
-	let mut obs = Vec::new();
-	let (dlat, dlon) = ((bbox.lat[1] - bbox.lat[0]) / cfg.tiles as f64, (bbox.lon[1] - bbox.lon[0]) / cfg.tiles as f64);
-	for i in 0..cfg.tiles {
-		for j in 0..cfg.tiles {
-			// the cache key is the body verbatim, so these expressions may not be re-associated
-			let (lat0, lon0) = (bbox.lat[0] + i as f64 * dlat, bbox.lon[0] + j as f64 * dlon);
-			let (lat1, lon1) = (bbox.lat[0] + (i + 1) as f64 * dlat, bbox.lon[0] + (j + 1) as f64 * dlon);
-			let rect = serde_json::json!({
-				"low":  {"latitude": lat0, "longitude": lon0},
-				"high": {"latitude": lat1, "longitude": lon1},
-			});
-			let tile = Bbox {
-				lat: [lat0, lat1],
-				lon: [lon0, lon1],
-			};
-			for q in &cfg.queries {
-				let body = serde_json::json!({"textQuery": q, "pageSize": 20, "locationRestriction": {"rectangle": rect}});
-				// 3 pages x 20 is the API maximum for one text search
-				let page = search_text(work, &key, &body, FIELDS, 3)?;
-				obs.push(Ranking {
-					from: Region::Tile(tile),
-					term: q.clone(),
-					ids: page.iter().map(|(id, _)| id.clone()).collect(),
-				});
-				for (id, p) in page {
-					raw.entry(id).or_insert(p);
-				}
-			}
+	let mut found = Found::default();
+	for q in &cfg.queries {
+		descend(work, key, q, bbox, 0, &mut found)?;
+	}
+	let Found { raw, obs, censored } = found;
+	if !censored.is_empty() {
+		eprintln!(
+			"places: {} tiles are still at the {CAP}-result cap at depth {DEPTH}, so the inventory under them is partial:",
+			censored.len()
+		);
+		for (q, t) in &censored {
+			eprintln!("  {q:?} over lat {:?} lon {:?}", t.lat, t.lon);
 		}
 	}
 
@@ -196,9 +203,62 @@ pub fn load(cfg: &PoiConfig, bbox: Bbox, work: &Work) -> Result<Inventory> {
 		});
 	}
 	out.sort_by(|a, b| b.n_rev.total_cmp(&a.n_rev));
-	eprintln!("places: {} raw over {} billed calls, {} kept", raw.len(), work.billed(), out.len());
+	eprintln!("places: {} raw over {} searches ({} billed), {} kept", raw.len(), obs.len(), work.billed(), out.len());
 	Ok(Inventory { pois: out, obs })
 }
+
+/// One query over one tile, quartered wherever the answer came back at the cap. Splitting is per
+/// query and not once for the whole sweep: "lavage auto" saturates downtown where "covering
+/// carrosserie" does not, and the quadrants of a tile nobody filled are not worth asking.
+///
+/// Not a study's to state: the cap bites on competitor density, which is a fact about the trade and
+/// the ground together, and which no document knows before it asks.
+fn descend(work: &Work, key: Option<&str>, query: &str, tile: Bbox, depth: u32, found: &mut Found) -> Result<()> {
+	// the cache key is the body verbatim, so a tile's corners may not be re-associated
+	let rect = serde_json::json!({
+		"low":  {"latitude": tile.lat[0], "longitude": tile.lon[0]},
+		"high": {"latitude": tile.lat[1], "longitude": tile.lon[1]},
+	});
+	let body = serde_json::json!({"textQuery": query, "pageSize": 20, "locationRestriction": {"rectangle": rect}});
+	let page = search_text(work, key, &body, FIELDS, 3)?;
+	// an ordering of nothing identifies nothing, and under a read-only key it is also what a tile
+	// that was never harvested looks like
+	if page.is_empty() {
+		return Ok(());
+	}
+	found.obs.push(Ranking {
+		from: Region::Tile(tile),
+		term: query.to_owned(),
+		ids: page.iter().map(|(id, _)| id.clone()).collect(),
+	});
+	for (id, p) in page.iter() {
+		found.raw.entry(id.clone()).or_insert_with(|| p.clone());
+	}
+	if page.len() < CAP {
+		return Ok(());
+	}
+	if depth == DEPTH {
+		found.censored.push((query.to_owned(), tile));
+		return Ok(());
+	}
+	let (mid_lat, mid_lon) = ((tile.lat[0] + tile.lat[1]) / 2., (tile.lon[0] + tile.lon[1]) / 2.);
+	for lat in [[tile.lat[0], mid_lat], [mid_lat, tile.lat[1]]] {
+		for lon in [[tile.lon[0], mid_lon], [mid_lon, tile.lon[1]]] {
+			descend(work, key, query, Bbox { lat, lon }, depth + 1, found)?;
+		}
+	}
+	Ok(())
+}
+
+/// What the recursion accumulates, before the tiering rules turn it into an `Inventory`.
+#[derive(Default)]
+struct Found {
+	raw: IndexMap<String, serde_json::Value>,
+	obs: Vec<Ranking>,
+	/// Query and tile still at the cap at the depth floor: the inventory under them is partial.
+	censored: Vec<(String, Bbox)>,
+}
+
 struct Matcher {
 	pattern: Option<Regex>,
 	types: Vec<String>,

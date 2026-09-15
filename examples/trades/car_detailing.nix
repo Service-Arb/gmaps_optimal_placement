@@ -1,8 +1,7 @@
-let clermont = import ../_Clermont-Ferrand.nix; in
+/* Car detailing and washing, over whichever city is handed in. */
+loc:
 {
-  name = "car_detailing_-_Clermont-Ferrand";
-
-  inherit (clermont) area grid;
+  inherit (loc) area grid candidate;
 
   poi = {
     source = "google_places";
@@ -16,7 +15,6 @@ let clermont = import ../_Clermont-Ferrand.nix; in
       "esthétique automobile"
       "covering carrosserie"
     ];
-    tiles = 3;
 
     # A dedicated detailer is direct competition; a rollover wash at a hypermarket is weak.
     # First match wins, so this stays a list.
@@ -43,7 +41,7 @@ let clermont = import ../_Clermont-Ferrand.nix; in
 
   # INSEE publishes no motorisation at all at 200 m — that variable exists only at IRIS level.
   # See docs/ARCHITECTURE.md on what this model therefore does not know.
-  column = clermont.column ++ [
+  column = loc.column ++ [
     { name = "cars"; expr = "men_mais * 1.55 + men_coll * 0.85"; }
   ];
 
@@ -57,7 +55,6 @@ let clermont = import ../_Clermont-Ferrand.nix; in
   # automobile"; they say they want the car cleaned.
   rank = {
     nodes = 32;
-    radius_m = 4000;
     term = [
       { text = "lavage auto"; weight = 1.0; }
       { text = "nettoyage intérieur voiture"; weight = 0.6; }
@@ -65,7 +62,7 @@ let clermont = import ../_Clermont-Ferrand.nix; in
     ];
   };
 
-  layer = clermont.layer ++ [
+  layer = loc.layer ++ [
     {
       name = "Estimated cars";
       expr = "cars";
@@ -75,7 +72,7 @@ let clermont = import ../_Clermont-Ferrand.nix; in
 
   # `match` / `drop` are the same vocabulary as `poi.tier` / `poi.drop`: case-insensitive regex,
   # `drop` checked first. The expansion is fuzzy and drags in intent that is not demand.
-  searches = clermont.searches // {
+  searches = loc.searches // {
     group = [
       {
         name = "detailing";
@@ -90,8 +87,4 @@ let clermont = import ../_Clermont-Ferrand.nix; in
       }
     ];
   };
-
-  candidate = [
-    { name = "VifNet"; at = [ 45.77616 3.06373 ]; }
-  ];
 }

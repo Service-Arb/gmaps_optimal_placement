@@ -71,7 +71,7 @@
         '';
 
         # The smoke test asserts Clermont's numbers, so it takes no study: `smoke.js` and
-        # `car_detailing_-_Clermont-Ferrand.nix` are one fixture.
+        # `car_detailing.nix` x `Clermont-Ferrand.nix` are one fixture.
         study = pkgs.writeShellApplication {
           name = "study";
           runtimeInputs = with pkgs; [ rust git pkg-config openssl mold nodejs chromium psmisc nix curl wasm-bindgen-cli ];
@@ -82,7 +82,7 @@
             # the smoke promotes and drops pins, so it gets a data dir of its own
             XDG_DATA_HOME="$(mktemp -d)"
             export XDG_DATA_HOME
-            cargo run -p gmaps_optimal_placement -- serve examples/studies/car_detailing_-_Clermont-Ferrand.nix --port ${toString port} &
+            cargo run -p gmaps_optimal_placement -- serve examples/trades/car_detailing.nix examples/locations/Clermont-Ferrand.nix --port ${toString port} &
             server=$!
             trap 'kill $server 2>/dev/null || true; rm -rf "$XDG_DATA_HOME"' EXIT
             # the router only exists once the study is evaluated, which reads an 87 MB archive
@@ -93,31 +93,34 @@
             node examples/smoke.js "http://localhost:${toString port}/"
           '';
         };
-        # `open [<study.nix>|<dir>]` — build the client, serve, open a browser. A directory lands on
-        # the page's own picker, which is also what `t` opens for every tab after the first.
+        # `open [<trades> <locations>]` — build the client, serve, open a browser. Directories land on
+        # the page's own two-step picker, which is also what `t` opens for every tab after the first.
         open = pkgs.writeShellApplication {
           name = "open-map";
           runtimeInputs = with pkgs; [ rust git pkg-config openssl mold psmisc xdg-utils nix wasm-bindgen-cli ];
           text = ''
-            [ $# -le 1 ] || { echo "usage: nix run .#open [<study.nix>|<dir>]" >&2; exit 1; }
-            if [ $# -eq 1 ]; then config="$(realpath "$1")"; else config=""; fi
+            [ $# -eq 0 ] || [ $# -eq 2 ] || { echo "usage: nix run .#open [<trades> <locations>]" >&2; exit 1; }
+            if [ $# -eq 2 ]; then trades="$(realpath "$1")"; locations="$(realpath "$2")"; else trades=""; locations=""; fi
             cd "$(git rev-parse --show-toplevel)"
-            config="''${config:-examples/studies}"
+            trades="''${trades:-examples/trades}"
+            locations="''${locations:-examples/locations}"
             ${client}
             fuser -k ${toString port}/tcp 2>/dev/null || true
-            exec cargo run -p gmaps_optimal_placement -- serve "$config" --port ${toString port} --open
+            exec cargo run -p gmaps_optimal_placement -- serve "$trades" "$locations" --port ${toString port} --open
           '';
         };
-        # `searches <study.nix|dir>` — build the volume chart, serve it, open it.
+        # `searches <trades> <locations>` — build the volume chart, serve it, open it.
         searches = pkgs.writeShellApplication {
           name = "open-searches";
           runtimeInputs = with pkgs; [ rust git pkg-config openssl mold python3 psmisc xdg-utils nix fzf ];
           text = ''
-            [ $# -eq 1 ] || { echo "usage: nix run .#searches <study.nix|dir>" >&2; exit 1; }
-            config="$(realpath "$1")"
+            [ $# -eq 0 ] || [ $# -eq 2 ] || { echo "usage: nix run .#searches [<trades> <locations>]" >&2; exit 1; }
+            if [ $# -eq 2 ]; then trades="$(realpath "$1")"; locations="$(realpath "$2")"; else trades=""; locations=""; fi
             cd "$(git rev-parse --show-toplevel)"
+            trades="''${trades:-examples/trades}"
+            locations="''${locations:-examples/locations}"
             out="''${GMAPS_OPTIMAL_PLACEMENT_WORK:-tmp/geo}/out"
-            cargo run -p gmaps_optimal_placement -- searches "$config" --out "$out/searches.html"
+            cargo run -p gmaps_optimal_placement -- searches "$trades" "$locations" --out "$out/searches.html"
             fuser -k ${toString port}/tcp 2>/dev/null || true
             xdg-open "http://localhost:${toString port}/searches.html" &
             cd "$out" && python3 -m http.server ${toString port}
@@ -142,19 +145,21 @@
           name = "help";
           text = ''
             cat <<'EOF'
-            nix run .#open  [<study.nix>|<dir>]  serve the map on :${toString port} and open it (Ctrl-C to stop).
-                                            a directory (default examples/studies) opens the page's own
-                                            picker; `t` opens another study, each as a tab over one map
-            nix run .#searches <study.nix|dir>  open the monthly search-volume chart for the study's query
-                                            groups. a directory is picked through fzf
+            nix run .#open [<trades> <locations>]  serve the map on :${toString port} and open it (Ctrl-C to stop).
+                                            directories (default examples/trades examples/locations) open
+                                            the page's own picker — trade first, then city; `t` opens
+                                            another pairing, each as a tab over one map
+            nix run .#searches [<trades> <locations>]  open the monthly search-volume chart for the query
+                                            groups of one pairing. a directory is picked through fzf
             nix run .#misc <country> <tally>  which towns in a country to write a study about at all:
                                             pool | building | parcel per --per column, --floor to skip hamlets
             nix run .#study                 serve the Clermont map and assert it in headless Chromium
             nix run .#help                  this
             cached archives and API responses live under $GMAPS_OPTIMAL_PLACEMENT_WORK (default tmp/geo);
             promoted candidates live under $XDG_DATA_HOME/gmaps_optimal_placement
-            a study is a Nix file evaluating to the attrset `gmaps_optimal_placement schema` describes: area, grid,
-            poi (queries + weighted tiers), column, model, layer, candidate, and an optional searches block.
+            a study is a trade applied to a location. examples/trades/<t>.nix is a function of the
+            location's attrset; examples/locations/<l>.nix carries area, candidate and searches.place.
+            together they evaluate to what `gmaps_optimal_placement schema` describes.
             EOF
           '';
         };

@@ -21,9 +21,10 @@ const TIER_COLORS: [&str; 5] = ["#ff2d55", "#00d0ff", "#ffb020", "#7ae77a", "#c7
 /// live signals; the map instance underneath is never rebuilt.
 #[derive(Clone)]
 pub struct Tab {
-	/// The file stem, which is what `/payload/{stem}` is keyed by.
-	pub stem: String,
-	/// The payload's own name once it has landed, the stem until then.
+	/// The two file stems, which is what `/payload/{trade}/{location}` is keyed by. What the pairing
+	/// is *called* is the payload's to say.
+	pub at: (String, String),
+	/// The payload's own name once it has landed, the pairing until then.
 	pub label: String,
 	pub model: Option<Rc<Model>>,
 	pub lambda: f64,
@@ -42,8 +43,9 @@ pub struct State {
 	/// `Model` is an `Rc`, so the tabs cannot live in a `Send` signal.
 	pub tabs: RwSignal<Vec<Tab>, LocalStorage>,
 	pub active: RwSignal<usize>,
-	/// Every stem in the served directory, whether or not it has a tab.
-	pub available: RwSignal<Vec<String>>,
+	/// The two axes served, whether or not any pairing of them has a tab.
+	pub trades: RwSignal<Vec<String>>,
+	pub locations: RwSignal<Vec<String>>,
 	pub picker: RwSignal<Option<Pool>>,
 	pub settings: RwSignal<bool>,
 	pub keys: RwSignal<Keymap>,
@@ -81,7 +83,8 @@ impl State {
 			heavy: StoredValue::new_local(Heavy::default()),
 			tabs: RwSignal::new_local(Vec::new()),
 			active: RwSignal::new(0),
-			available: RwSignal::new(Vec::new()),
+			trades: RwSignal::new(Vec::new()),
+			locations: RwSignal::new(Vec::new()),
 			picker: RwSignal::new(None),
 			settings: RwSignal::new(false),
 			keys: RwSignal::new(Keymap::default()),
@@ -466,7 +469,7 @@ mod imp {
 
 	/// Server-side the island renders its empty shell; nothing recomputes until the wasm lands.
 	pub fn wire(_: State) {}
-	pub fn open(_: State, _: String) {}
+	pub fn open(_: State, _: String, _: String) {}
 	pub fn activate(_: State, _: usize) {}
 	pub fn close(_: State, _: usize) {}
 	pub fn persist_keys(_: State) {}
@@ -626,53 +629,56 @@ mod imp {
 		});
 	}
 
-	/// What the directory holds and what the CLI already built.
+	/// The two axes the CLI was given, and whatever pairing it already built.
 	#[derive(serde::Deserialize)]
 	struct Studies {
-		available: Vec<String>,
-		open: Vec<String>,
+		trades: Vec<String>,
+		locations: Vec<String>,
+		open: Vec<(String, String)>,
 	}
 
-	/// The directory, the saved keys, and a tab per study the CLI picked.
+	/// The product, the saved keys, and a tab per pairing the CLI named.
 	async fn boot(s: State) {
-		let dir = match get::<Studies>("/studies.json").await {
+		let served = match get::<Studies>("/studies.json").await {
 			Ok(d) => d,
-			Err(e) => return s.banner.set(Some(format!("⚠ the directory never arrived — {e}"))),
+			Err(e) => return s.banner.set(Some(format!("⚠ what is served never arrived — {e}"))),
 		};
-		s.available.set(dir.available);
+		s.trades.set(served.trades);
+		s.locations.set(served.locations);
 		match crate::tabs::load_keys().await {
 			Ok(Some(k)) => s.keys.set(k),
 			Ok(None) => {}
 			Err(e) => s.banner.set(Some(format!("⚠ keys — {e}"))),
 		}
-		for stem in dir.open {
-			add(s, stem).await;
+		for at in served.open {
+			add(s, at).await;
 		}
-		// a directory was served rather than a study, so the first choice is made the same way every
+		// a product was served rather than one pairing, so the first choice is made the same way every
 		// later one is
 		match s.tabs.with_untracked(Vec::is_empty) {
-			true => s.picker.set(Some(Pool::All)),
+			true => s.picker.set(Some(Pool::Trade)),
 			false => adopt(s, 0),
 		}
 	}
 
 	/// Fetch a study, build its `Model`, and give it a tab. Mounts the map on the first one.
-	async fn add(s: State, stem: String) -> Option<usize> {
-		// a study the server has not built yet reads the grid archive and every POI page, which is
+	async fn add(s: State, at: (String, String)) -> Option<usize> {
+		// a pairing the server has not built yet reads the grid archive and every POI page, which is
 		// tens of seconds of nothing to look at
-		s.banner.set(Some(format!("building {stem} …")));
-		let url = format!("/payload/{}", js_sys::encode_uri_component(&stem));
+		let shown = format!("{} in {}", at.0, at.1);
+		s.banner.set(Some(format!("building {shown} …")));
+		let url = format!("/payload/{}/{}", js_sys::encode_uri_component(&at.0), js_sys::encode_uri_component(&at.1));
 		let payload = match get::<gmaps_optimal_placement_core::Payload>(&url).await {
 			Ok(p) => p,
 			Err(e) => {
-				s.banner.set(Some(format!("⚠ {stem} — {e}")));
+				s.banner.set(Some(format!("⚠ {shown} — {e}")));
 				return None;
 			}
 		};
 		let model = match gmaps_optimal_placement_core::Model::try_new(payload) {
 			Ok(m) => std::rc::Rc::new(m),
 			Err(e) => {
-				s.banner.set(Some(format!("⚠ {stem} — {e}")));
+				s.banner.set(Some(format!("⚠ {shown} — {e}")));
 				return None;
 			}
 		};
@@ -682,7 +688,7 @@ mod imp {
 			Vec::new()
 		});
 		let tab = Tab {
-			stem,
+			at,
 			label: model.payload.name.clone(),
 			lambda: model.payload.lambda_m,
 			layer: 0,
@@ -756,13 +762,14 @@ mod imp {
 	///
 	/// Not `leptos::task::spawn_local`: the picker closes itself on the way in, and a task owned by a
 	/// component that is being disposed is dropped rather than run.
-	pub fn open(s: State, stem: String) {
+	pub fn open(s: State, trade: String, location: String) {
 		wasm_bindgen_futures::spawn_local(async move {
-			if let Some(i) = s.tabs.with_untracked(|v| v.iter().position(|t| t.stem == stem)) {
+			let at = (trade, location);
+			if let Some(i) = s.tabs.with_untracked(|v| v.iter().position(|t| t.at == at)) {
 				return activate(s, i);
 			}
 			stash(s);
-			if let Some(i) = add(s, stem).await {
+			if let Some(i) = add(s, at).await {
 				adopt(s, i);
 			}
 		});
@@ -881,7 +888,7 @@ mod imp {
 		let at = s.active.get_untracked();
 		let ours = match k {
 			_ if k == m.open => {
-				s.picker.set(Some(Pool::All));
+				s.picker.set(Some(Pool::Trade));
 				true
 			}
 			_ if k == m.find => {

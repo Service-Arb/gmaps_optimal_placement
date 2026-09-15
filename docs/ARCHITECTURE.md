@@ -1,14 +1,14 @@
 # gmaps_optimal_placement
 
-Where should a service business open. One Nix file describes an area, a statistical grid, what
-counts as a competitor and how demand follows from whatever columns that grid publishes; the tool
-serves a map that answers it.
+Where should a service business open. A location describes an area and the statistical grid behind
+it; a trade, applied to that location, describes what counts as a competitor and how demand follows
+from whatever columns that grid publishes; the tool serves a map that answers it.
 
-The question is the input. Retargeting a city, a country or a trade is an edit to the study
-document, never to the code.
+The question is the input. Retargeting a city, a country or a trade is an edit to one of the two
+documents, never to the code.
 
 ```
-              study.nix ─── the pinned interface
+        trade.nix (location.nix) ─── the pinned interface
                    │
    ┌───────────────┴───────────────────────────────────────────┐
    │ gmaps_optimal_placement_sources        network, cache     │
@@ -36,16 +36,21 @@ document, never to the code.
    ┌───────┴──────────────────────────┐   ┌────────┴──────────────────────┐
    │ gmaps_optimal_placement          │   │ gmaps_optimal_placement_web   │
    │   CLI, study, HTML               │──▶│   ssr: axum + server fns      │
-   │   a directory of them            │   │   hydrate: the MapView island │
+   │   trades × locations             │   │   hydrate: the MapView island │
    └──────────────────────────────────┘   │   map_core.js: google.maps    │
                                           └────────┬──────────────────────┘
                                                    ▼
                                     a served map · one <name>-searches.html
 ```
 
-`serve` holds a directory rather than a study, and the page picks out of it: the server builds a
-study the first time a tab asks for it, and the page keeps several open over one map instance. A
-named file is built before the listener binds, which is what keeps a scripted run off the picker.
+`serve` holds the two axes rather than a study, and the page picks a point on their product — the
+trade, then the city. The server builds a pairing the first time a tab asks for it, and the page
+keeps several open over one map instance. Naming both as files builds one before the listener binds,
+which is what keeps a scripted run off the picker.
+
+What a pairing is *called* — `<trade>_-_<location>`, from the two stems — is the CLI's to say. The
+web crate keys on the stems and the pin file keys on the name, so neither has a second spelling of
+it to keep in step.
 
 The map answers where the people are. It does not answer how many are looking for the thing, which
 is what `searches` is for: a cell can be dense, affluent and uncontested and still sit under a trade
@@ -88,6 +93,10 @@ app, so every entry point in `map_core.js` returns a banner string instead.
   same mechanism for a plumber and a detailer, so the reviews→prominence curve is a fitted constant
   in `core::rank`, not an expression a study writes; what the study says is which queries it cares
   about and what each is worth.
+- **A trade may not name a city, and a location may not name a trade.** They are the two axes of a
+  product, and a quantity that needs both is a quantity neither document can state honestly: it
+  belongs in Rust, derived. The POI sweep's tiling and the probe's bias radius are there for exactly
+  this reason. The alternative is the same knob written out per pairing, drifting apart silently.
 - **A fitted quantity is refitted, never hand-edited.** `rank::COEF` is the output of
   `gmaps_optimal_placement fit` over the orderings in the work dir. Nudging a coefficient because the map looks
   wrong turns a measurement back into the guess it replaced.
@@ -131,7 +140,7 @@ decision, and they are the difference between a map that informs one and a map t
 guess into authority. The worked examples are in `examples/`.
 
 - **Motorisation is estimated, not measured.** No 200 m source publishes households-with-a-car;
-  INSEE has it only at IRIS level. The Clermont study infers it from the house/flat split
+  INSEE has it only at IRIS level. The detailing trade infers it from the house/flat split
   (`men_mais × 1.55 + men_coll × 0.85`). Directionally right, not a measurement.
 - **Most fine-grained cells are modelled.** ~80 % of INSEE 200 m cells have fewer than 11 fiscal
   households, so their values are imputed. The flag is carried through to the map and the "hide

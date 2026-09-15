@@ -1,5 +1,6 @@
 /* What every French study shares regardless of city or trade: the grid, how INSEE spells the
-   numbers it publishes, and who prices a keyword in French. */
+   numbers it publishes, and who prices a keyword in French. A city file in [locations/] takes this
+   and adds its frame; a trade in [trades/] is a function of that. */
 {
   grid = {
     source = "insee_filosofi_200m";
@@ -33,6 +34,11 @@
       name = "Households in houses";
       expr = "men_mais";
       note = "House rather than flat: a private driveway, a private boiler, no syndic standing between the household and the trade.";
+    }
+    {
+      name = "Households in flats";
+      expr = "men_coll";
+      note = "The other half of the split. What the flat shares — the parties communes, the riser, the roof — is let by a syndic, not by the household on the map.";
     }
   ];
 

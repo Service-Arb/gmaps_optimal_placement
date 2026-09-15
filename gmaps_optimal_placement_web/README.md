@@ -1,13 +1,14 @@
 # gmaps_optimal_placement_web
 
-The map. A Leptos island over a directory of studies, and the axum server that feeds it.
+The map. A Leptos island over a set of trades and a set of locations, and the axum server that feeds
+their product.
 
 ```text
-gmaps_optimal_placement serve studies/
+gmaps_optimal_placement serve trades/ locations/
         │
         ├─ GET /              shell — the Maps bootstrap, the CSS, the island marker
-        ├─ GET /studies.json  every stem in the directory, and the ones the CLI prebuilt
-        ├─ GET /payload/{stem}  the evaluated study, multi-MB, built once per stem
+        ├─ GET /studies.json  the two axes, and the pairings the CLI prebuilt
+        ├─ GET /payload/{trade}/{location}  the evaluated study, multi-MB, built once per pairing
         ├─ GET /pkg/*         the client wasm
         └─ /api/*             server fns: the pin file under XDG_DATA_HOME,
                               the key bindings under XDG_CONFIG_HOME

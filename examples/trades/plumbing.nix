@@ -1,8 +1,7 @@
-let clermont = import ../_Clermont-Ferrand.nix; in
+/* Plumbing and heating, over whichever city is handed in. */
+loc:
 {
-  name = "plumbing_-_Clermont-Ferrand";
-
-  inherit (clermont) area grid;
+  inherit (loc) area grid candidate;
 
   poi = {
     source = "google_places";
@@ -16,7 +15,6 @@ let clermont = import ../_Clermont-Ferrand.nix; in
       "installateur sanitaire"
       "installation chauffage"
     ];
-    tiles = 3;
 
     # A plumber is direct competition; a handyman who will take the job if asked is not found first.
     # First match wins, so this stays a list.
@@ -44,7 +42,7 @@ let clermont = import ../_Clermont-Ferrand.nix; in
 
   # A flat's failing riser goes to whoever the syndic already contracts, so only its interior counts.
   # `log_*` partition `men` by construction period, and `men_prop` is the owner-occupier subset.
-  column = clermont.column ++ [
+  column = loc.column ++ [
     { name = "homes"; expr = "men_mais + men_coll * 0.5"; }
     { name = "old_share"; expr = "(log_av45 + log_45_70) / max(men, 1)"; }
     { name = "owner_share"; expr = "men_prop / max(men, 1)"; }
@@ -62,7 +60,6 @@ let clermont = import ../_Clermont-Ferrand.nix; in
   # variation the name coefficient cannot be fitted on. "chauffage" is what the customer types.
   rank = {
     nodes = 32;
-    radius_m = 4000;
     term = [
       { text = "plombier"; weight = 1.0; }
       { text = "chauffage"; weight = 0.7; }
@@ -70,7 +67,7 @@ let clermont = import ../_Clermont-Ferrand.nix; in
     ];
   };
 
-  layer = clermont.layer ++ [
+  layer = loc.layer ++ [
     {
       name = "Addressable dwellings";
       expr = "homes";
@@ -90,7 +87,7 @@ let clermont = import ../_Clermont-Ferrand.nix; in
 
   # Nobody searches "chauffagiste" and everybody searches "chauffage" (see niches/plumbing/Aquafix),
   # so the heating group is seeded on the trade word and matched on the layman's.
-  searches = clermont.searches // {
+  searches = loc.searches // {
     group = [
       {
         name = "plomberie";
