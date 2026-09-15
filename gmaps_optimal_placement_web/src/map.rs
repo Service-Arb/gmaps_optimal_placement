@@ -860,6 +860,14 @@ mod imp {
 		{
 			return;
 		}
+		// a yellow pin is a click and nothing has been written down for it, so it undoes like one
+		if k == "Backspace" {
+			if let Some(p) = s.selected.get_untracked().and_then(|id| s.pin(&id)).filter(|p| !p.green) {
+				ev.prevent_default();
+				crate::pins::forget(s, p);
+			}
+			return;
+		}
 		let n = s.tabs.with_untracked(Vec::len);
 		if let Ok(d) = k.parse::<usize>() {
 			let i = if d == 0 { n.checked_sub(1) } else { (d <= n).then(|| d - 1) };
