@@ -187,9 +187,9 @@ pub fn TabBar(state: State) -> impl IntoView {
 /// closes. A cursor sits on its field's first hit, as `fzf`'s does, and every edit of that query
 /// puts it back there — so a pairing is only ever one field away from being the one on screen.
 ///
-/// A click lands its own field's cursor and the caret, and does no more: half a pairing is not a
-/// choice to act on, and a cursor that followed the mouse would make the click itself invisible.
-/// Where there is only one field, crossing has nowhere to go and `Enter` takes.
+/// The cursor is a pre-selection: arrows move it, and so does the mouse passing over a row. A click
+/// settles it, which is what `Enter` does and no more — half a pairing is not a choice to act on.
+/// Where there is only one field, crossing has nowhere to go and settling takes.
 #[component]
 pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 	let cols = pool.cols();
@@ -223,6 +223,12 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 				state.picker.set(None);
 				crate::map::activate(state, i);
 			},
+	};
+	// what `Enter` and a click both do: the cursor is settled, and the caret goes where there is
+	// still something to narrow
+	let settle = move |col: usize| match cols == 1 {
+		true => take(),
+		false => side.set((col + 1) % cols),
 	};
 
 	// the overlay is modal, so the keys below are only ever the picker's
@@ -266,9 +272,9 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 									}
 									if ev.key() == "Enter" {
 										ev.prevent_default();
-										return match ev.ctrl_key() || cols == 1 {
+										return match ev.ctrl_key() {
 											true => take(),
-											false => side.set((col + 1) % cols),
+											false => settle(col),
 										};
 									}
 									if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
@@ -291,9 +297,10 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 											view! {
 												<li
 													class:on=move || sel[col].get() == row
+													on:mouseenter=move |_| sel[col].set(row)
 													on:click=move |_| {
 														sel[col].set(row);
-														side.set(col);
+														settle(col);
 													}
 												>
 													{name}
