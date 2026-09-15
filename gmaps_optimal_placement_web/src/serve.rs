@@ -1,5 +1,6 @@
 //! The server half. It holds a set of trades and a set of locations and serves the map over their
-//! product.
+//! product — and over each location on its own, which is the same product with the trade axis
+//! extended by the identity.
 //!
 //! `LeptosOptions` is built here rather than read from `Cargo.toml`: this ships as a CLI that runs
 //! from wherever the studies are, and `--port` has to win over a manifest it may never see.
@@ -12,16 +13,18 @@ use axum::{Router, extract::Path as UrlPath, http::StatusCode, routing::get};
 use eyre::{Result, WrapErr};
 use leptos::prelude::*;
 
-/// A trade and a location, to the serialised `Payload` of pairing them.
-pub type Build = Arc<dyn Fn(&std::path::Path, &std::path::Path) -> Result<String> + Send + Sync>;
+/// A trade and a location, to the serialised `Payload` of pairing them. No trade is a location on
+/// its own, which is the half of the product that costs nothing to build.
+pub type Build = Arc<dyn Fn(Option<&std::path::Path>, &std::path::Path) -> Result<String> + Send + Sync>;
 
 /// One cell per pairing, so two tabs asking at once read the 87 MB archive once between them. Keyed
 /// by the two stems rather than by the study's name: what a pairing is called is the CLI's to say,
 /// and a second spelling of it here is a second thing to keep in step with the pin file.
-type Pool = Arc<HashMap<(String, String), (PathBuf, PathBuf, Arc<tokio::sync::OnceCell<axum::body::Bytes>>)>>;
+type Key = (Option<String>, String);
+type Pool = Arc<HashMap<Key, (Option<PathBuf>, PathBuf, Arc<tokio::sync::OnceCell<axum::body::Bytes>>)>>;
 
 /// `prebuilt` is `(trade stem, location stem, payload)` — whatever the CLI already paid for.
-pub fn serve(trades: Vec<PathBuf>, locations: Vec<PathBuf>, prebuilt: Vec<(String, String, String)>, build: Build, addr: SocketAddr, open: bool) -> Result<()> {
+pub fn serve(trades: Vec<PathBuf>, locations: Vec<PathBuf>, prebuilt: Vec<(Option<String>, String, String)>, build: Build, addr: SocketAddr, open: bool) -> Result<()> {
 	// leptos spawns the SSR stream through `any_spawner`, which has no executor until it is told
 	any_spawner::Executor::init_tokio().map_err(|e| eyre::eyre!("{e}"))?;
 	let key = std::env::var("GOOGLE_MAPS_KEY").wrap_err("GOOGLE_MAPS_KEY is not set")?;
@@ -48,17 +51,21 @@ pub fn serve(trades: Vec<PathBuf>, locations: Vec<PathBuf>, prebuilt: Vec<(Strin
 	let stems = |v: &[PathBuf]| -> Vec<String> { v.iter().map(|p| p.file_stem().expect("a *.nix path has a stem").to_string_lossy().into_owned()).collect() };
 	let (trade_stems, location_stems) = (stems(&trades), stems(&locations));
 
-	let mut pool: HashMap<_, _> = trades
+	// every location twice over: crossed with each trade, and on its own
+	let mut pool: HashMap<Key, _> = locations
 		.iter()
-		.zip(&trade_stems)
-		.flat_map(|(t, ts)| {
-			locations
-				.iter()
-				.zip(&location_stems)
-				.map(move |(l, ls)| ((ts.clone(), ls.clone()), (t.clone(), l.clone(), Arc::new(tokio::sync::OnceCell::new()))))
+		.zip(&location_stems)
+		.flat_map(|(l, ls)| {
+			let bare = std::iter::once(((None, ls.clone()), (None, l.clone(), Arc::new(tokio::sync::OnceCell::new()))));
+			bare.chain(
+				trades
+					.iter()
+					.zip(&trade_stems)
+					.map(move |(t, ts)| ((Some(ts.clone()), ls.clone()), (Some(t.clone()), l.clone(), Arc::new(tokio::sync::OnceCell::new())))),
+			)
 		})
 		.collect();
-	let opened: Vec<[String; 2]> = prebuilt.iter().map(|(t, l, _)| [t.clone(), l.clone()]).collect();
+	let opened: Vec<Key> = prebuilt.iter().map(|(t, l, _)| (t.clone(), l.clone())).collect();
 	for (t, l, json) in prebuilt {
 		let (_, _, cell) = pool
 			.get_mut(&(t.clone(), l.clone()))
@@ -77,12 +84,14 @@ pub fn serve(trades: Vec<PathBuf>, locations: Vec<PathBuf>, prebuilt: Vec<(Strin
 	};
 
 	let studies = serde_json::json!({ "trades": trade_stems, "locations": location_stems, "open": opened }).to_string();
+	let bare = (pool.clone(), build.clone());
 	let mut app = Router::new()
 		.route("/studies.json", get(move || std::future::ready(json(studies.clone()))))
 		.route(
 			"/payload/{trade}/{location}",
-			get(move |UrlPath(at): UrlPath<(String, String)>| payload(pool.clone(), build.clone(), at)),
+			get(move |UrlPath((t, l)): UrlPath<(String, String)>| payload(pool.clone(), build.clone(), (Some(t), l))),
 		)
+		.route("/place/{location}", get(move |UrlPath(l): UrlPath<String>| payload(bare.0.clone(), bare.1.clone(), (None, l))))
 		.nest_service("/pkg", tower_http::services::ServeDir::new(pkg));
 	for (path, method) in leptos::server_fn::axum::server_fn_paths() {
 		app = app.route(
@@ -114,7 +123,7 @@ pub fn serve(trades: Vec<PathBuf>, locations: Vec<PathBuf>, prebuilt: Vec<(Strin
 }
 
 /// Built on the first tab that asks for it. A failure is the eyre chain, which the page banners.
-async fn payload(pool: Pool, build: Build, at: (String, String)) -> Result<([(axum::http::HeaderName, &'static str); 1], axum::body::Bytes), (StatusCode, String)> {
+async fn payload(pool: Pool, build: Build, at: Key) -> Result<([(axum::http::HeaderName, &'static str); 1], axum::body::Bytes), (StatusCode, String)> {
 	let Some((trade, location, cell)) = pool.get(&at) else {
 		return Err((StatusCode::NOT_FOUND, format!("{:?} is not a trade over {:?}", at.0, at.1)));
 	};
@@ -122,8 +131,11 @@ async fn payload(pool: Pool, build: Build, at: (String, String)) -> Result<([(ax
 		.get_or_try_init(|| {
 			let (trade, location, build) = (trade.clone(), location.clone(), build.clone());
 			async move {
-				let shown = format!("{} x {}", trade.display(), location.display());
-				tokio::task::spawn_blocking(move || build(&trade, &location).map(axum::body::Bytes::from))
+				let shown = match &trade {
+					Some(t) => format!("{} x {}", t.display(), location.display()),
+					None => location.display().to_string(),
+				};
+				tokio::task::spawn_blocking(move || build(trade.as_deref(), &location).map(axum::body::Bytes::from))
 					.await
 					.map_err(|e| format!("building {shown}: {e}"))?
 					.map_err(|e| format!("{e:?}"))

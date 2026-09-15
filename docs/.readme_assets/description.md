@@ -14,7 +14,8 @@ asked for over the trailing year — the map says where the people are, this say
 are looking for the thing.
 
 The question is the input: another city is a location file, another trade is a trade file, and every
-pairing of the two is a study. Neither is an edit to the code.
+pairing of the two is a study. Neither is an edit to the code. A location on its own is a study too
+— the grid, and nothing a trade decides — and it is the one the Google Maps quota is not spent on.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the invariants, and
 [examples/](examples) for worked studies.

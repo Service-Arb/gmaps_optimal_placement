@@ -57,7 +57,8 @@ pub struct MemberOut {
 /// The grid and everything derived from it. Everything up to, and not including, the billed part.
 pub struct Cells {
 	pub grid: gmaps_optimal_placement_core::Grid,
-	pub demand: Vec<f64>,
+	/// `None` for a location opened without a trade: a demand expression is a trade's to write.
+	pub demand: Option<Vec<f64>>,
 	pub layers: Vec<LayerOut>,
 }
 
@@ -74,7 +75,11 @@ impl Study {
 			grid.columns.insert(c.name.clone(), values);
 		}
 
-		let demand = Expr::parse(&self.model.demand)?.eval_column(&grid.columns, n).wrap_err("[model] demand")?;
+		let demand = self
+			.model
+			.as_ref()
+			.map(|m| Expr::parse(&m.demand)?.eval_column(&grid.columns, n).wrap_err("[model] demand"))
+			.transpose()?;
 		let layers = self
 			.layers
 			.iter()
@@ -91,14 +96,32 @@ impl Study {
 		Ok(Cells { grid, demand, layers })
 	}
 
+	/// What a trade decides, or the error every subcommand but `serve` owes a location that was
+	/// opened without one. The three travel together: a trade file writes all of them.
+	fn trade(&self) -> Result<(&gmaps_optimal_placement_sources::PoiConfig, &config::Model, &config::RankSpec)> {
+		let missing = |what: &str| eyre::eyre!("{} declares no `{what}` — a location on its own carries the grid and nothing a trade decides", self.name);
+		Ok((
+			self.poi.as_ref().ok_or_else(|| missing("poi"))?,
+			self.model.as_ref().ok_or_else(|| missing("model"))?,
+			self.rank.as_ref().ok_or_else(|| missing("rank"))?,
+		))
+	}
+
+	/// The demand a trade's model puts over this grid.
+	fn demand<'a>(&self, cells: &'a Cells) -> Result<&'a [f64]> {
+		self.trade()?;
+		Ok(cells.demand.as_deref().expect("a study with a model evaluates one"))
+	}
+
 	/// The ordering evidence this study contributes: the inventory sweep always, the probe wherever
 	/// it has already been run. Reads the work dir, never the network — so a pairing nobody has ever
 	/// built costs nothing and is `None`.
 	pub fn observations(&self, work: &Work) -> Result<Option<Observed>> {
 		let cells = self.cells(work)?;
-		let inv = poi::cached(&self.poi, self.area.bbox, work)?;
+		let (poi, _, _) = self.trade()?;
+		let inv = poi::cached(poi, self.area.bbox, work)?;
 		let mut obs = inv.obs;
-		let probed = probe::cached(work, &probe::plan(&at(&self.nodes(&cells)?), &self.terms(), self.radius_m()))?;
+		let probed = probe::cached(work, &probe::plan(&at(&self.nodes(&cells)?), &self.terms()?, self.radius_m()?))?;
 		eprintln!("{}: {} orderings from the inventory sweep, {} from the probe", self.name, obs.len(), probed.len());
 		obs.extend(probed);
 		if obs.is_empty() {
@@ -110,12 +133,12 @@ impl Study {
 
 	pub fn probe(&self, work: &Work, dry: bool) -> Result<Vec<Ranking>> {
 		let nodes = self.nodes(&self.cells(work)?)?;
-		let plan = probe::plan(&at(&nodes), &self.terms(), self.radius_m());
+		let plan = probe::plan(&at(&nodes), &self.terms()?, self.radius_m()?);
 		if dry {
 			for n in &nodes {
 				eprintln!("  {:.5}, {:.5}   {:.1}% of demand", n.at[0], n.at[1], 100. * n.share);
 			}
-			eprintln!("{} nodes, biased {:.1} km", nodes.len(), self.radius_m() / 1000.);
+			eprintln!("{} nodes, biased {:.1} km", nodes.len(), self.radius_m()? / 1000.);
 			let need = probe::unanswered(work, &plan)?;
 			eprintln!("{} searches, {need} still unanswered: {need} Text Search Essentials", plan.len());
 			// the same refusal a run would meet, before it has a key in hand to meet it with
@@ -126,19 +149,19 @@ impl Study {
 		Ok(out)
 	}
 
-	fn terms(&self) -> Vec<String> {
-		self.rank.terms.iter().map(|t| t.text.clone()).collect()
+	fn terms(&self) -> Result<Vec<String>> {
+		Ok(self.trade()?.2.terms.iter().map(|t| t.text.clone()).collect())
 	}
 
 	/// The `locationBias` circle: one stratum's worth of ground, as a circle. `rank.nodes` cuts the
 	/// frame into equal shares of demand, so this is how far a searcher standing at one of them is
 	/// from its edge on average — which is the distance the coefficient is identified over. Not a
 	/// study's to state: it needs the frame and the node count, and those sit on opposite axes.
-	fn radius_m(&self) -> f64 {
+	fn radius_m(&self) -> Result<f64> {
 		let b = self.area.bbox;
 		let lat_m = (b.lat[1] - b.lat[0]) * 111_320.;
 		let lon_m = (b.lon[1] - b.lon[0]) * 111_320. * ((b.lat[0] + b.lat[1]) / 2.).to_radians().cos();
-		(lat_m * lon_m / self.rank.nodes as f64 / std::f64::consts::PI).sqrt()
+		Ok((lat_m * lon_m / self.trade()?.2.nodes as f64 / std::f64::consts::PI).sqrt())
 	}
 
 	fn nodes(&self, cells: &Cells) -> Result<Vec<rank::Node>> {
@@ -151,20 +174,56 @@ impl Study {
 				[lat, lon]
 			})
 			.collect();
-		rank::nodes(&at, &cells.demand, self.rank.nodes)
+		rank::nodes(&at, self.demand(cells)?, self.trade()?.2.nodes)
 	}
 
+	/// A location opened without a trade stops at the grid: nothing below reaches `poi::load`, so it
+	/// spends no Places call and no day of the quota.
 	pub fn build(&self, work: &Work) -> Result<Payload> {
 		let cells = self.cells(work)?;
 		let n = cells.grid.len();
 		let place: Vec<String> = cells.grid.cells.iter().map(|c| c.place.clone()).collect();
-		let inv = poi::load(&self.poi, self.area.bbox, &self.name, work)?;
-		let model = Rank::try_new(feats(&place, &inv.pois)?, rank::COEF)?;
-		let terms: Vec<(String, f64)> = self.rank.terms.iter().map(|t| (t.text.clone(), t.weight)).collect();
+		for (i, c) in self.candidates.iter().enumerate() {
+			// the pin file hides by name, so a duplicate would hide two pins at once
+			ensure!(!self.candidates[..i].iter().any(|o| o.name == c.name), "two [[candidate]] are both named {:?}", c.name);
+		}
+
+		let mut ring = Vec::with_capacity(n * 8);
+		for c in &cells.grid.cells {
+			for p in c.ring {
+				// 5 decimals is ~1 m: below the cell size, and a third of the file size of full f64
+				ring.push(round1(p[0], 5));
+				ring.push(round1(p[1], 5));
+			}
+		}
+		let trade = match (&self.poi, &self.model, &self.rank) {
+			(None, None, None) => None,
+			// a half-written trade is not a location, and `trade()` says which block is missing
+			_ => Some(self.billed(&cells, &place, work)?),
+		};
+		Ok(Payload {
+			name: self.name.clone(),
+			center: self.area.center,
+			zoom: self.area.zoom,
+			ring,
+			imputed: cells.grid.cells.iter().map(|c| u8::from(c.imputed)).collect(),
+			place,
+			layers: cells.layers,
+			candidates: self.candidates.clone(),
+			trade,
+		})
+	}
+
+	/// The billed half. Every Places call this tool makes on a map is behind this.
+	fn billed(&self, cells: &Cells, place: &[String], work: &Work) -> Result<payload::Trade> {
+		let (poi_cfg, model_cfg, rank_cfg) = self.trade()?;
+		let inv = poi::load(poi_cfg, self.area.bbox, &self.name, work)?;
+		let model = Rank::try_new(feats(place, &inv.pois)?, rank::COEF)?;
+		let terms: Vec<(String, f64)> = rank_cfg.terms.iter().map(|t| (t.text.clone(), t.weight)).collect();
 
 		// a study nobody has probed carries no nodes, and the map offers no observed coverage layer
-		let nodes = at(&self.nodes(&cells)?);
-		let probed = probe::cached(work, &probe::plan(&nodes, &self.terms(), self.radius_m()))?;
+		let nodes = at(&self.nodes(cells)?);
+		let probed = probe::cached(work, &probe::plan(&nodes, &self.terms()?, self.radius_m()?))?;
 		let seen = gmaps_optimal_placement_rank::observed(&inv.pois, &nodes, &probed, &terms);
 		let nodes = match probed.is_empty() {
 			true => Vec::new(),
@@ -187,37 +246,16 @@ impl Study {
 				}
 			})
 			.collect();
-		normalise(&mut pois, &self.poi.tiers)?;
-		for t in &self.poi.tiers {
+		normalise(&mut pois, &poi_cfg.tiers)?;
+		for t in &poi_cfg.tiers {
 			ensure!(pois.iter().any(|p| p.poi.tier == t.name), "no competitor fell into tier {:?}", t.name);
 		}
-		for (i, c) in self.candidates.iter().enumerate() {
-			// the pin file hides by name, so a duplicate would hide two pins at once
-			ensure!(!self.candidates[..i].iter().any(|o| o.name == c.name), "two [[candidate]] are both named {:?}", c.name);
-		}
-
-		let mut ring = Vec::with_capacity(n * 8);
-		for c in &cells.grid.cells {
-			for p in c.ring {
-				// 5 decimals is ~1 m: below the cell size, and a third of the file size of full f64
-				ring.push(round1(p[0], 5));
-				ring.push(round1(p[1], 5));
-			}
-		}
-		Ok(Payload {
-			name: self.name.clone(),
-			center: self.area.center,
-			zoom: self.area.zoom,
-			lambda_m: self.model.lambda_m,
-			demand_note: self.model.demand.clone(),
-			ring,
-			place,
-			imputed: cells.grid.cells.iter().map(|c| u8::from(c.imputed)).collect(),
+		Ok(payload::Trade {
+			lambda_m: model_cfg.lambda_m,
+			demand_note: model_cfg.demand.clone(),
+			demand: round(self.demand(cells)?.to_vec(), 3),
 			inventory_age_d: work.age(sources::work::Kind::Inventory).map(|a| round1(a.oldest.as_secs_f64() / 86_400., 1)),
-			demand: round(cells.demand, 3),
-			layers: cells.layers,
-			tiers: self
-				.poi
+			tiers: poi_cfg
 				.tiers
 				.iter()
 				.map(|t| TierOut {
@@ -228,7 +266,6 @@ impl Study {
 			terms: terms.into_iter().map(|(text, weight)| payload::TermOut { text, weight }).collect(),
 			nodes,
 			pois,
-			candidates: self.candidates.clone(),
 		})
 	}
 
@@ -369,9 +406,15 @@ pub fn pick(path: &Path) -> Result<PathBuf> {
 /// A trade applied to a location. The trade file is a function of the location's attrset, which is
 /// what lets the frame and the statistics office it publishes be stated once per city rather than
 /// once per city and trade.
-pub fn load(trade: &Path, location: &Path) -> Result<Study> {
-	let (trade, location) = (abs(trade)?, abs(location)?);
-	let expr = format!("import {} (import {})", trade.display(), location.display());
+///
+/// No trade is the identity of that application: the location's own attrset is already a study, and
+/// it is the one that costs nothing to build.
+pub fn load(trade: Option<&Path>, location: &Path) -> Result<Study> {
+	let (trade, location) = (trade.map(abs).transpose()?, abs(location)?);
+	let expr = match &trade {
+		Some(t) => format!("import {} (import {})", t.display(), location.display()),
+		None => format!("import {}", location.display()),
+	};
 	// `--impure` for the absolute paths: pure evaluation only admits a path it was handed as the
 	// root, and the root here is a pair
 	let out = std::process::Command::new("nix")
@@ -380,7 +423,10 @@ pub fn load(trade: &Path, location: &Path) -> Result<Study> {
 		.wrap_err("running `nix eval` — a study is a Nix expression, so nix must be on PATH")?;
 	ensure!(out.status.success(), "evaluating {expr}:\n{}", String::from_utf8_lossy(&out.stderr).trim());
 	let mut study: Study = serde_json::from_slice(&out.stdout).wrap_err_with(|| format!("parsing {expr}"))?;
-	study.name = format!("{}_-_{}", stem(&trade), stem(&location));
+	study.name = match &trade {
+		Some(t) => format!("{}_-_{}", stem(t), stem(&location)),
+		None => stem(&location).to_owned(),
+	};
 	if study.layers.is_empty() {
 		bail!("{} declares no [[layer]]", study.name);
 	}
@@ -395,20 +441,22 @@ fn abs(p: &Path) -> Result<PathBuf> {
 /// Summary statistics, so a model change that moves numbers is visible rather than silent.
 pub fn stats(p: &Payload) -> IndexMap<String, String> {
 	let sum = |v: &[f64]| v.iter().sum::<f64>();
-	let mut w: Vec<f64> = p.pois.iter().map(|q| q.w).collect();
-	w.sort_by(f64::total_cmp);
 	let mut m = IndexMap::from([
 		("cells".to_owned(), p.place.len().to_string()),
 		("imputed_cells".to_owned(), p.imputed.iter().filter(|&&i| i == 1).count().to_string()),
-		("demand_total".to_owned(), format!("{:.1}", sum(&p.demand))),
-		("competitors".to_owned(), p.pois.len().to_string()),
-		(
+	]);
+	if let Some(t) = &p.trade {
+		let mut w: Vec<f64> = t.pois.iter().map(|q| q.w).collect();
+		w.sort_by(f64::total_cmp);
+		m.insert("demand_total".to_owned(), format!("{:.1}", sum(&t.demand)));
+		m.insert("competitors".to_owned(), t.pois.len().to_string());
+		m.insert(
 			"competitor_w".to_owned(),
 			format!("total {:.2}, median {:.2}, max {:.2}", sum(&w), w[w.len() / 2], w[w.len() - 1]),
-		),
-	]);
-	for t in &p.tiers {
-		m.insert(format!("tier_{}", t.name), p.pois.iter().filter(|q| q.poi.tier == t.name).count().to_string());
+		);
+		for tier in &t.tiers {
+			m.insert(format!("tier_{}", tier.name), t.pois.iter().filter(|q| q.poi.tier == tier.name).count().to_string());
+		}
 	}
 	for l in &p.layers {
 		m.insert(format!("layer_{}_total", l.name.to_lowercase().replace(' ', "_")), format!("{:.1}", sum(&l.values)));

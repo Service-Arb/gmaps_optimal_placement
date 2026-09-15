@@ -35,7 +35,8 @@ struct Pair {
 enum Cmd {
 	/// Where the people are: demand under the competitors, as a map served from here. The page picks
 	/// a trade and a city out of the two directories, a field per axis; naming both as files opens
-	/// the one tab, already built
+	/// the one tab, already built. The trade field also offers none, which serves the city off the
+	/// statistical archive alone and spends nothing
 	Serve {
 		#[command(flatten)]
 		at: Pair,
@@ -133,10 +134,10 @@ fn main() -> Result<()> {
 			let (trades, locations) = (gmaps_optimal_placement::files(&at.trades)?, gmaps_optimal_placement::files(&at.locations)?);
 			let prebuilt = match (trades.as_slice(), locations.as_slice()) {
 				([trade], [location]) => {
-					let payload = gmaps_optimal_placement::load(trade, location)?.build(&work)?;
+					let payload = gmaps_optimal_placement::load(Some(trade), location)?.build(&work)?;
 					report(gmaps_optimal_placement::stats(&payload));
 					vec![(
-						gmaps_optimal_placement::stem(trade).to_owned(),
+						Some(gmaps_optimal_placement::stem(trade).to_owned()),
 						gmaps_optimal_placement::stem(location).to_owned(),
 						serde_json::to_string(&payload)?,
 					)]
@@ -147,7 +148,7 @@ fn main() -> Result<()> {
 			// from whichever blocking thread a tab's first request landed on. `--refresh` does not come
 			// along: it belongs to the run that asked for it, and a tab switch is not one
 			let (dir, age, per_day) = (work.path().to_owned(), (&cfg.age).into(), cfg.places.per_day);
-			let build = std::sync::Arc::new(move |trade: &std::path::Path, location: &std::path::Path| {
+			let build = std::sync::Arc::new(move |trade: Option<&std::path::Path>, location: &std::path::Path| {
 				let payload = gmaps_optimal_placement::load(trade, location)?.build(&Work::at(dir.clone()).policy(age, per_day))?;
 				Ok(serde_json::to_string(&payload)?)
 			});
@@ -155,12 +156,13 @@ fn main() -> Result<()> {
 		}
 		Cmd::Probe { at, dry_run, refresh: _ } => {
 			let (trade, location) = (gmaps_optimal_placement::pick(&at.trades)?, gmaps_optimal_placement::pick(&at.locations)?);
-			gmaps_optimal_placement::load(&trade, &location)?.probe(&work, dry_run)?;
+			gmaps_optimal_placement::load(Some(&trade), &location)?.probe(&work, dry_run)?;
 			Ok(())
 		}
 		Cmd::Fit { at } => {
 			let (studies, observed) = harvest(&at, &work)?;
-			let lambda: Vec<f64> = studies.iter().map(|s| s.model.lambda_m).collect();
+			// `harvest` only keeps a study that contributed orderings, and only a trade can
+			let lambda: Vec<f64> = studies.iter().map(|s| s.model.as_ref().expect("a study with orderings has a trade").lambda_m).collect();
 			let fit: fit::Fit = observed.iter().collect();
 			report(fit.stats(&lambda));
 			fit.check()
@@ -179,7 +181,7 @@ fn main() -> Result<()> {
 		}
 		Cmd::Searches { at, out } => {
 			let (trade, location) = (gmaps_optimal_placement::pick(&at.trades)?, gmaps_optimal_placement::pick(&at.locations)?);
-			let payload = gmaps_optimal_placement::load(&trade, &location)?.searches(&work)?;
+			let payload = gmaps_optimal_placement::load(Some(&trade), &location)?.searches(&work)?;
 			report(gmaps_optimal_placement::search_stats(&payload));
 			let html = gmaps_optimal_placement::render::render_searches(&payload)?;
 			write(out.unwrap_or_else(|| work.path().join("out").join(format!("{}-searches.html", payload.name))), &html)
@@ -194,7 +196,7 @@ fn harvest(at: &Pair, work: &Work) -> Result<(Vec<Study>, Vec<Observed>)> {
 	let (trades, locations) = (gmaps_optimal_placement::files(&at.trades)?, gmaps_optimal_placement::files(&at.locations)?);
 	let studies = trades
 		.iter()
-		.flat_map(|t| locations.iter().map(move |l| gmaps_optimal_placement::load(t, l)))
+		.flat_map(|t| locations.iter().map(move |l| gmaps_optimal_placement::load(Some(t), l)))
 		.collect::<Result<Vec<_>>>()?;
 	let (mut kept, mut observed) = (Vec::new(), Vec::new());
 	for s in studies {

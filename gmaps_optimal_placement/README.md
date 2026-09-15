@@ -18,6 +18,10 @@ list order, so a study can name a quantity its source only implies. Every expres
 before any of it reaches the map — an expression naming a column that does not exist is an error,
 not a zero.
 
+`load` takes no trade as well, and then a location is already a study: `poi`, `model` and `rank` are
+`None`, [`Study::build`] never reaches `poi::load`, and what comes back is the grid's own layers
+under the city's own name. `serve` offers it as the last row of the trade field.
+
 An optional `searches` block names groups of queries. [`fold`] is the half of that command that is
 ours: the provider expands seeds semantically, a regex keeps or drops each member, and the survivors
 sum into one line of [`SearchPayload`] — with their own series alongside, so the sum can be audited.

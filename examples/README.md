@@ -14,6 +14,10 @@ There is no code here. A study is a **trade applied to a location**: `import tra
    poi / column / model / rank / searches.group are the trade, and none of them names a city
 ```
 
+A location handed to no trade is a study too — `import locations/Lyon.nix` on its own, named after
+the city, carrying the grid, the raw INSEE layers and the candidate addresses. It is the picker's
+last trade row, `(no trade · grid only)`, and it makes no Places call.
+
 Every trade × every location is a study, named `<trade>_-_<location>` by the tool. That name keys
 the pin file under `$XDG_DATA_HOME` and the searches chart, so a candidate promoted on the Lyon
 cleaning map cannot land on the Clermont one.
@@ -40,6 +44,9 @@ nix run .#study                                  # the detailing map, asserted i
 | Demand | the study's `model.demand` |
 | Population / Households / Households in houses / in flats | raw INSEE |
 | Standard of living €/yr | per-person rate, **not** a density |
+
+The first three need a trade. Without one the bottom two rows are the whole table, and λ, the tier
+weights, the site sweep and the candidate comparison are disabled.
 
 Live controls: catchment radius λ, the weight of one tier against the other, opacity, marker filters
 per tier, hide imputed cells.

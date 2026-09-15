@@ -5,6 +5,11 @@
 //! (import locations/Lyon.nix)` — because the two vary independently. What the location decides is
 //! the frame, the statistics office behind it, and the addresses being considered; everything else
 //! is the trade. Nothing here may need both: see the invariant in `docs/ARCHITECTURE.md`.
+//!
+//! A location on its own is also a study — `import locations/Lyon.nix`, the identity of the pairing
+//! — and the three fields below that a trade fills are `None` for it. What is left is what the
+//! statistical archive publishes, which is the whole of the free half: a city can be looked at
+//! before a single Places call is spent on it.
 use gmaps_optimal_placement_core::grid::Bbox;
 pub use gmaps_optimal_placement_core::payload::{Candidate, Scale};
 use gmaps_optimal_placement_sources::{GridSource, PoiConfig};
@@ -20,14 +25,18 @@ pub struct Study {
 	pub name: String,
 	pub area: Area,
 	pub grid: GridSpec,
-	pub poi: PoiConfig,
+	/// The trade's three, absent together on a location opened without one.
+	#[serde(default)]
+	pub poi: Option<PoiConfig>,
 	/// Columns the source does not publish, evaluated in order over the ones it does. Later entries
 	/// may read earlier ones, so this is a list: an attribute set would be evaluated in whatever
 	/// order its names happen to sort in.
 	#[serde(default, rename = "column")]
 	pub columns: Vec<Column>,
-	pub model: Model,
-	pub rank: RankSpec,
+	#[serde(default)]
+	pub model: Option<Model>,
+	#[serde(default)]
+	pub rank: Option<RankSpec>,
 	#[serde(rename = "layer")]
 	pub layers: Vec<Layer>,
 	/// Optional: the map answers where the people are, this answers how many of them ask for the
@@ -118,7 +127,9 @@ pub struct Searches {
 	pub place: String,
 	/// ISO-639-1.
 	pub language: String,
-	#[serde(rename = "group")]
+	/// The trade's, so a location states the provider and the place and nothing else. `searches`
+	/// refuses an empty set rather than charting one.
+	#[serde(default, rename = "group")]
 	pub groups: Vec<Group>,
 }
 

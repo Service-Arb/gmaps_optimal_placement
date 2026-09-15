@@ -10,6 +10,7 @@
 //!        │
 //!   ┌────┴──── t ─→ Pool::Study    two fields, what and where; Enter crosses, Ctrl-Enter takes
 //!   │  Picker                      ↑ also where a served product starts
+//!   │                              the trade field ends in NO_TRADE — the city, unpriced
 //!   └───────── f ─→ Pool::Open     filter the open tabs, switch to one
 //! ```
 //!
@@ -18,6 +19,9 @@
 //! Both fields are live at once, so a pairing is two narrowings in either order — which is what a
 //! step sequence could not do, having already spent the first choice by the time the second is on
 //! screen.
+//!
+//! [`NO_TRADE`] sits at the end of the trade field rather than at its head: a city on its own is
+//! the cheap question, not the usual one, and the cursor opens on whatever a field's first row is.
 //!
 //! This is the only picker: `serve` does not run `fzf` over a directory, because choosing the first
 //! study and choosing the fourth should not be two different motions.
@@ -31,6 +35,10 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::map::State;
+
+/// The last row of the trade field: a location built from the statistical archive alone, which is
+/// every layer a trade did not add and not one billed call.
+pub const NO_TRADE: &str = "(no trade · grid only)";
 
 /// Which set the picker is filtering, and so how many fields it puts up.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -203,7 +211,7 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 		Memo::new(move |_| {
 			let q = query[col].get();
 			let all: Vec<(usize, String)> = match (pool, col) {
-				(Pool::Study, 0) => state.trades.get().into_iter().enumerate().collect(),
+				(Pool::Study, 0) => state.trades.get().into_iter().chain([NO_TRADE.to_owned()]).enumerate().collect(),
 				(Pool::Study, _) => state.locations.get().into_iter().enumerate().collect(),
 				(Pool::Open, _) => state.tabs.get().into_iter().enumerate().map(|(i, t)| (i, t.label)).collect(),
 			};
@@ -214,9 +222,10 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 	// a field with no hit has nothing to contribute, and half a pairing opens nothing
 	let take = move || match pool {
 		Pool::Study =>
-			if let (Some((_, trade)), Some((_, location))) = (at(0), at(1)) {
+			if let (Some((i, trade)), Some((_, location))) = (at(0), at(1)) {
 				state.picker.set(None);
-				crate::map::open(state, trade, location);
+				// the row past the served trades is the one the server has no file for
+				crate::map::open(state, (i < state.trades.with_untracked(Vec::len)).then_some(trade), location);
 			},
 		Pool::Open =>
 			if let Some((i, _)) = at(0) {
@@ -280,7 +289,6 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 									if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
 										return;
 									}
-									// the fields are the only tab stops, so this wraps rather than leaving the overlay
 									if ev.key() == "Tab" {
 										ev.prevent_default();
 										side.set((col + 1) % cols);

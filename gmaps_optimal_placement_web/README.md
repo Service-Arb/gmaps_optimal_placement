@@ -9,10 +9,16 @@ gmaps_optimal_placement serve trades/ locations/
         ├─ GET /              shell — the Maps bootstrap, the CSS, the island marker
         ├─ GET /studies.json  the two axes, and the pairings the CLI prebuilt
         ├─ GET /payload/{trade}/{location}  the evaluated study, multi-MB, built once per pairing
+        ├─ GET /place/{location}            the same city with no trade over it: the statistical
+        │                                   archive alone, and not one billed call
         ├─ GET /pkg/*         the client wasm
         └─ /api/*             server fns: the pin file under XDG_DATA_HOME,
                               the key bindings under XDG_CONFIG_HOME
 ```
+
+The trade field ends in one row the server has no file for: taking it opens the location by itself.
+λ, the tier weights and both sweeps are then disabled rather than hidden — the panel is what says
+what a trade would buy.
 
 A tab is one study's `Model` plus the controls as they stood when it was last left. Switching writes
 the live signals into the tab being left and reads the next one into them; `press` and `unmet` are

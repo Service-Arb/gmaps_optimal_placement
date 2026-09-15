@@ -21,9 +21,10 @@ const TIER_COLORS: [&str; 5] = ["#ff2d55", "#00d0ff", "#ffb020", "#7ae77a", "#c7
 /// live signals; the map instance underneath is never rebuilt.
 #[derive(Clone)]
 pub struct Tab {
-	/// The two file stems, which is what `/payload/{trade}/{location}` is keyed by. What the pairing
-	/// is *called* is the payload's to say.
-	pub at: (String, String),
+	/// The two file stems, which is what `/payload/{trade}/{location}` is keyed by. No trade is a
+	/// location on its own, under `/place/{location}`. What the pairing is *called* is the payload's
+	/// to say.
+	pub at: (Option<String>, String),
 	/// The payload's own name once it has landed, the pairing until then.
 	pub label: String,
 	pub model: Option<Rc<Model>>,
@@ -244,6 +245,9 @@ pub struct Loaded {
 	pub imputed: usize,
 	/// How old the competitor inventory under this map is. `None` where it was bought on this run.
 	pub age_d: Option<f64>,
+	/// Whether this tab has a trade under it. Everything a slider moves is the trade's, so this is
+	/// what the panel greys out on.
+	pub traded: bool,
 }
 
 #[derive(Clone, PartialEq)]
@@ -266,6 +270,9 @@ pub struct Tip {
 pub fn MapView() -> impl IntoView {
 	let s = State::new();
 	imp::wire(s);
+	// no trade under the tab: λ, the tier weights and both sweeps are functions of a demand surface
+	// and an inventory, and neither is on the page
+	let traded = move || s.loaded.get().is_some_and(|l| l.traded);
 
 	view! {
 		<crate::tabs::TabBar state=s />
@@ -318,6 +325,7 @@ pub fn MapView() -> impl IntoView {
 				min="300"
 				max="6000"
 				step="100"
+				prop:disabled=move || !traded()
 				prop:value=move || s.lambda.get()
 				on:input=move |ev| {
 					if let Ok(v) = event_target_value(&ev).parse() {
@@ -416,9 +424,23 @@ pub fn MapView() -> impl IntoView {
 					.map(|d| view! { <p class="note">{format!("Competitors as of {d:.0} days ago")}</p> })
 			}}
 
-			<button on:click=move |_| s.rank()>"Rank top 10 sites"</button>
+			{move || {
+				(!traded())
+					.then(|| {
+						view! {
+							<p class="note">
+								"No trade — this is the statistical grid alone, and it cost no Places call. Open the same city under a trade for demand, the competitors on it, and the sweeps."
+							</p>
+						}
+					})
+			}}
+
+			<button prop:disabled=move || !traded() on:click=move |_| s.rank()>
+				"Rank top 10 sites"
+			</button>
 			<button
 				style:display=move || if s.core.get().is_empty() { "none" } else { "block" }
+				prop:disabled=move || !traded()
 				on:click=move |_| s.compare()
 			>
 				"Compare candidates"
@@ -486,7 +508,7 @@ mod imp {
 
 	/// Server-side the island renders its empty shell; nothing recomputes until the wasm lands.
 	pub fn wire(_: State) {}
-	pub fn open(_: State, _: String, _: String) {}
+	pub fn open(_: State, _: Option<String>, _: String) {}
 	pub fn activate(_: State, _: usize) {}
 	pub fn close(_: State, _: usize) {}
 	pub fn persist_keys(_: State) {}
@@ -510,7 +532,12 @@ mod imp {
 	/// never pay for a pressure sweep.
 	fn recompute(s: State) {
 		s.heavy.update_value(|h| {
-			let Some(m) = h.model.clone() else { return };
+			// a tab with no trade leaves nothing of the last one's sweep behind: the arrays are the
+			// active study's or they are empty
+			let Some(m) = h.model.clone().filter(|m| m.traded()) else {
+				(h.press, h.unmet) = (Vec::new(), Vec::new());
+				return;
+			};
 			h.press = m.pressure(s.lambda.get_untracked(), &s.tiers.get_untracked());
 			h.unmet = m.unmet(&h.press);
 		});
@@ -530,7 +557,8 @@ mod imp {
 					ticks: c.ticks,
 					count: c.count,
 					linear: spec.linear,
-					focus: matches!(spec.source, LayerRef::Share | LayerRef::Seen).then(|| m.payload.pois[of].poi.name.clone()),
+					focus: matches!(spec.source, LayerRef::Share | LayerRef::Seen)
+						.then(|| m.payload.trade.as_ref().expect("a coverage layer is only offered under a trade").pois[of].poi.name.clone()),
 				},
 				c.colors,
 				c.shown,
@@ -656,7 +684,7 @@ mod imp {
 	struct Studies {
 		trades: Vec<String>,
 		locations: Vec<String>,
-		open: Vec<(String, String)>,
+		open: Vec<(Option<String>, String)>,
 	}
 
 	/// The product, the saved keys, and a tab per pairing the CLI named.
@@ -684,12 +712,19 @@ mod imp {
 	}
 
 	/// Fetch a study, build its `Model`, and give it a tab. Mounts the map on the first one.
-	async fn add(s: State, at: (String, String)) -> Option<usize> {
+	async fn add(s: State, at: (Option<String>, String)) -> Option<usize> {
 		// a pairing the server has not built yet reads the grid archive and every POI page, which is
 		// tens of seconds of nothing to look at
-		let shown = format!("{} in {}", at.0, at.1);
+		let shown = match &at.0 {
+			Some(t) => format!("{t} in {}", at.1),
+			None => at.1.clone(),
+		};
 		s.banner.set(Some(format!("building {shown} …")));
-		let url = format!("/payload/{}/{}", js_sys::encode_uri_component(&at.0), js_sys::encode_uri_component(&at.1));
+		let location = js_sys::encode_uri_component(&at.1);
+		let url = match &at.0 {
+			Some(t) => format!("/payload/{}/{location}", js_sys::encode_uri_component(t)),
+			None => format!("/place/{location}"),
+		};
 		let payload = match get::<gmaps_optimal_placement_core::Payload>(&url).await {
 			Ok(p) => p,
 			Err(e) => {
@@ -712,7 +747,8 @@ mod imp {
 		let tab = Tab {
 			at,
 			label: model.payload.name.clone(),
-			lambda: model.payload.lambda_m,
+			// inert without a trade: the slider is disabled and nothing reads the number
+			lambda: model.payload.trade.as_ref().map_or(2000., |t| t.lambda_m),
 			layer: 0,
 			focus: 0,
 			hide_imputed: false,
@@ -763,9 +799,15 @@ mod imp {
 		s.selected.set(t.selected);
 		s.loaded.set(Some(super::Loaded {
 			layers: m.layers().into_iter().map(|l| (l.name, l.note)).collect(),
-			tier_counts: m.payload.tiers.iter().map(|t| m.payload.pois.iter().filter(|p| p.poi.tier == t.name).count()).collect(),
+			tier_counts: m
+				.payload
+				.trade
+				.iter()
+				.flat_map(|t| t.tiers.iter().map(|x| t.pois.iter().filter(|p| p.poi.tier == x.name).count()))
+				.collect(),
 			imputed: m.payload.imputed.iter().filter(|&&i| i == 1).count(),
-			age_d: m.payload.inventory_age_d,
+			age_d: m.payload.trade.as_ref().and_then(|t| t.inventory_age_d),
+			traded: m.traded(),
 		}));
 		document().set_title(&m.payload.name);
 		// before the sweep, which is the one slow thing here and which no marker depends on
@@ -788,7 +830,7 @@ mod imp {
 	///
 	/// Not `leptos::task::spawn_local`: the picker closes itself on the way in, and a task owned by a
 	/// component that is being disposed is dropped rather than run.
-	pub fn open(s: State, trade: String, location: String) {
+	pub fn open(s: State, trade: Option<String>, location: String) {
 		wasm_bindgen_futures::spawn_local(async move {
 			let at = (trade, location);
 			if let Some(i) = s.tabs.with_untracked(|v| v.iter().position(|t| t.at == at)) {
@@ -840,7 +882,9 @@ mod imp {
 	/// The picker's cursor, kept inside its own scroll box. Rows are one line each — see `#picker li`
 	/// — so the cursor's offset is its index times a row.
 	pub fn scroll_pick(row: usize) {
-		let Some(li) = document().query_selector("#picker .col.on li.on").ok().flatten() else { return };
+		let Some(li) = document().query_selector("#picker .col.on li.on").ok().flatten() else {
+			return;
+		};
 		let Some(ul) = li.parent_element() else { return };
 		let (h, seen) = (li.client_height(), ul.client_height());
 		let (top, bottom) = (row as i32 * h, (row as i32 + 1) * h);
@@ -953,17 +997,12 @@ mod imp {
 
 	/// The whole competitor inventory, as `map_core.js` wants it.
 	fn competitors(model: &gmaps_optimal_placement_core::Model) -> String {
-		let out: Vec<serde_json::Value> = model
-			.payload
+		let Some(trade) = &model.payload.trade else { return "[]".to_owned() };
+		let out: Vec<serde_json::Value> = trade
 			.pois
 			.iter()
 			.map(|p| {
-				let ti = model
-					.payload
-					.tiers
-					.iter()
-					.position(|t| t.name == p.poi.tier)
-					.expect("the model rejected a payload whose tiers disagree");
+				let ti = trade.tiers.iter().position(|t| t.name == p.poi.tier).expect("the model rejected a payload whose tiers disagree");
 				serde_json::json!({
 					"lat": p.poi.lat, "lng": p.poi.lng, "name": p.poi.name, "addr": p.poi.addr,
 					"kind": if p.poi.kind_label.is_empty() { &p.poi.kind } else { &p.poi.kind_label },

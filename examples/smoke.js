@@ -218,8 +218,32 @@ async function main() {
   assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand"], "the pairing picked at load is the one open tab");
   assert.equal(await layers(), 10, "four live layers plus the study's six");
 
+  // the city on its own: the archive and nothing billed, which is what the last row of the trade
+  // field buys. Everything a slider moves is a trade's, so the panel has to say so
+  log("step: a location with no trade");
   await press("t");
-  assert.deepEqual(await rows(0), ["car_detailing", "cleaning", "plumbing"], "one field per axis, and this one is the trades");
+  await pick(0, "(no trade · grid only)");
+  await pick(1, "Clermont-Ferrand");
+  await take();
+  for (let i = 0; i < 240; i++) {
+    if ((await tabs()).length === 2) break;
+    await sleep(1000);
+  }
+  assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand", "Clermont-Ferrand"], "a location on its own is named after the city");
+  assert.equal(await layers(), 5, "the location's five INSEE layers, and not one that needs a demand model");
+  // the city's own candidate is still a pin — a premises is the location's, not the trade's
+  await expectMarkers(1, "nothing was bought, so no competitor is on the map");
+  assert(await evaluate(`${ctl("Rank top 10 sites")}.disabled`), "the sweep has no demand to sweep");
+  assert(await evaluate("document.querySelector('#ctl input[type=range]').disabled"), "and λ has no catchment to set");
+  await press("w");
+  assert.deepEqual(await tabs(), ["car_detailing_-_Clermont-Ferrand"], "`w` leaves the trade study behind it");
+
+  await press("t");
+  assert.deepEqual(
+    await rows(0),
+    ["car_detailing", "cleaning", "plumbing", "(no trade · grid only)"],
+    "one field per axis, and this one is the trades — with the city-on-its-own row last",
+  );
   assert.deepEqual(await rows(1), ["Clermont-Ferrand", "Lyon"], "the locations are up at the same time, not after");
 
   // the two fields narrow independently — which is the whole of what a step sequence could not do

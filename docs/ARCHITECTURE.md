@@ -52,6 +52,11 @@ a pairing the first time a tab asks for it, and the page keeps several open over
 Naming both axes as files builds one before the listener binds, which is what keeps a scripted run
 off the picker.
 
+The trade axis carries one extra point: none. A trade file is a function of a location, so no trade
+is that function's identity — the location's own attrset is already a study. `Payload::trade` is the
+one `Option` that says so, and everything behind it is everything that is billed. A city can
+therefore be looked at before any of the Places quota goes on it.
+
 The axes are `--trades` and `--locations` rather than two positionals: they are the same shape, so
 nothing about a bare pair of paths says which is which.
 
@@ -109,6 +114,9 @@ app, so every entry point in `map_core.js` returns a banner string instead.
   product, and a quantity that needs both is a quantity neither document can state honestly: it
   belongs in Rust, derived. The POI sweep's tiling and the probe's bias radius are there for exactly
   this reason. The alternative is the same knob written out per pairing, drifting apart silently.
+- **Demand is a trade's word.** `model.demand` is what a trade says the grid means to it. Without
+  one there is no demand surface, and nothing stands in for it: the layer is absent and the controls
+  that read λ, a tier weight or a demand value are disabled. Population is not demand.
 - **A fitted quantity is refitted, never hand-edited.** `rank::COEF` is the output of
   `gmaps_optimal_placement fit` over the orderings in the work dir. Nudging a coefficient because the map looks
   wrong turns a measurement back into the guess it replaced.

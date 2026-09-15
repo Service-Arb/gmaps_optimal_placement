@@ -9,7 +9,7 @@ use eyre::{Result, ensure};
 use serde::Serialize;
 
 use crate::{
-	payload::{Candidate, Payload, PoiOut, Scale},
+	payload::{Candidate, Payload, PoiOut, Scale, Trade},
 	rank::{self, Biz, Feats, Rank},
 };
 
@@ -100,14 +100,21 @@ pub struct Model {
 	/// Cell centroids in metres from the grid's own centre. Flat-earth over one agglomeration.
 	mx: Vec<f64>,
 	my: Vec<f64>,
-	/// Probe nodes in the same frame, in `payload.nodes` order. Empty for an unprobed study.
-	nx: Vec<f64>,
-	ny: Vec<f64>,
 	lat0: f64,
 	lng0: f64,
 	m_per_lng: f64,
 	m_per_lat: f64,
+	/// Present exactly when `payload.trade` is.
+	trade: Option<Traded>,
+}
+
+/// What projecting and rescoring the trade half bought. Paired with `Payload::trade` and never
+/// without it.
+struct Traded {
 	comps: Vec<Comp>,
+	/// Probe nodes in the cells' frame, in `Trade::nodes` order. Empty for an unprobed study.
+	nx: Vec<f64>,
+	ny: Vec<f64>,
 	/// The same fitted model `build` weighted the competitors with, so the what-if is scored on the
 	/// scale the map is already painted in.
 	rank: Rank,
@@ -121,7 +128,7 @@ impl Model {
 		let n = payload.place.len();
 		ensure!(n > 0, "payload carries no cells");
 		ensure!(payload.ring.len() == n * 8, "payload carries {} ring numbers for {n} cells", payload.ring.len());
-		ensure!(payload.demand.len() == n && payload.imputed.len() == n, "payload arrays disagree on the cell count");
+		ensure!(payload.imputed.len() == n, "payload arrays disagree on the cell count");
 		for l in &payload.layers {
 			ensure!(l.values.len() == n, "layer {:?} carries {} values for {n} cells", l.name, l.values.len());
 		}
@@ -153,61 +160,64 @@ impl Model {
 		for i in 0..n {
 			(mx[i], my[i]) = local(c_lat[i], c_lng[i]);
 		}
-		let (mut nx, mut ny) = (Vec::new(), Vec::new());
-		for at in &payload.nodes {
-			let (x, y) = local(at[0], at[1]);
-			nx.push(x);
-			ny.push(y);
-		}
-		for p in &payload.pois {
-			ensure!(
-				p.seen.len() == payload.nodes.len(),
-				"competitor {:?} carries {} node observations against {} nodes",
-				p.poi.name,
-				p.seen.len(),
-				payload.nodes.len()
-			);
-		}
-		let comps = payload
-			.pois
-			.iter()
-			.map(|p| {
-				let tier = payload
-					.tiers
+		let trade = payload
+			.trade
+			.as_ref()
+			.map(|t| {
+				ensure!(t.demand.len() == n, "payload carries {} demand values for {n} cells", t.demand.len());
+				let (mut nx, mut ny) = (Vec::new(), Vec::new());
+				for at in &t.nodes {
+					let (x, y) = local(at[0], at[1]);
+					nx.push(x);
+					ny.push(y);
+				}
+				for p in &t.pois {
+					ensure!(
+						p.seen.len() == t.nodes.len(),
+						"competitor {:?} carries {} node observations against {} nodes",
+						p.poi.name,
+						p.seen.len(),
+						t.nodes.len()
+					);
+				}
+				let comps = t
+					.pois
 					.iter()
-					.position(|t| t.name == p.poi.tier)
-					.ok_or_else(|| eyre::eyre!("competitor {:?} is in tier {:?}, which the payload does not declare", p.poi.name, p.poi.tier))?;
-				let (mx, my) = local(p.poi.lat, p.poi.lng);
-				Ok(Comp { mx, my, w: p.w, tier })
+					.map(|p| {
+						let tier = t
+							.tiers
+							.iter()
+							.position(|x| x.name == p.poi.tier)
+							.ok_or_else(|| eyre::eyre!("competitor {:?} is in tier {:?}, which the payload does not declare", p.poi.name, p.poi.tier))?;
+						let (mx, my) = local(p.poi.lat, p.poi.lng);
+						Ok(Comp { mx, my, w: p.w, tier })
+					})
+					.collect::<Result<Vec<_>>>()?;
+
+				let rated: Vec<f64> = t.pois.iter().filter_map(|p| p.poi.rating).collect();
+				ensure!(!rated.is_empty(), "no competitor carries a rating, so there is nothing to shrink towards");
+				let rank = Rank::try_new(Feats::try_new(rated.iter().sum::<f64>() / rated.len() as f64, &payload.place)?, rank::COEF)?;
+				let terms: Vec<(String, f64)> = t.terms.iter().map(|x| (x.text.clone(), x.weight)).collect();
+
+				// rescoring the first tier here recovers the divisor `build` used, and proves the coefficients
+				// that painted this payload are the ones linked in: otherwise the map would quietly show
+				// weights from a model nobody is running any more
+				let first = &t.tiers.first().ok_or_else(|| eyre::eyre!("payload declares no tier"))?.name;
+				let mut scored: Vec<(f64, f64)> = t.pois.iter().filter(|p| &p.poi.tier == first).map(|p| (rank.strength(&Biz::from(&p.poi), &terms), p.w)).collect();
+				ensure!(!scored.is_empty(), "no competitor is in tier {first:?}, which is the scale everything else is read against");
+				scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+				let scale = scored[scored.len() / 2].0;
+				ensure!(scale > 0., "tier {first:?} scores a median strength of {scale}");
+				for (raw, w) in &scored {
+					ensure!(
+						(raw / scale - w).abs() < 1e-3,
+						"tier {first:?} carries w={w} where rank::COEF now scores {:.4} — the payload was built by a different model",
+						raw / scale
+					);
+				}
+				Ok(Traded { comps, nx, ny, rank, terms, scale })
 			})
-			.collect::<Result<Vec<_>>>()?;
-
-		let rated: Vec<f64> = payload.pois.iter().filter_map(|p| p.poi.rating).collect();
-		ensure!(!rated.is_empty(), "no competitor carries a rating, so there is nothing to shrink towards");
-		let rank = Rank::try_new(Feats::try_new(rated.iter().sum::<f64>() / rated.len() as f64, &payload.place)?, rank::COEF)?;
-		let terms: Vec<(String, f64)> = payload.terms.iter().map(|t| (t.text.clone(), t.weight)).collect();
-
-		// rescoring the first tier here recovers the divisor `build` used, and proves the coefficients
-		// that painted this payload are the ones linked in: otherwise the map would quietly show
-		// weights from a model nobody is running any more
-		let first = &payload.tiers.first().ok_or_else(|| eyre::eyre!("payload declares no tier"))?.name;
-		let mut scored: Vec<(f64, f64)> = payload
-			.pois
-			.iter()
-			.filter(|p| &p.poi.tier == first)
-			.map(|p| (rank.strength(&Biz::from(&p.poi), &terms), p.w))
-			.collect();
-		ensure!(!scored.is_empty(), "no competitor is in tier {first:?}, which is the scale everything else is read against");
-		scored.sort_by(|a, b| a.0.total_cmp(&b.0));
-		let scale = scored[scored.len() / 2].0;
-		ensure!(scale > 0., "tier {first:?} scores a median strength of {scale}");
-		for (raw, w) in &scored {
-			ensure!(
-				(raw / scale - w).abs() < 1e-3,
-				"tier {first:?} carries w={w} where rank::COEF now scores {:.4} — the payload was built by a different model",
-				raw / scale
-			);
-		}
+			.transpose()?;
 
 		Ok(Self {
 			payload,
@@ -217,28 +227,40 @@ impl Model {
 			c_lng,
 			mx,
 			my,
-			nx,
-			ny,
 			lat0,
 			lng0,
 			m_per_lng,
 			m_per_lat,
-			comps,
-			rank,
-			terms,
-			scale,
+			trade,
 		})
+	}
+
+	/// Whether the map has a demand surface and competitors under it, or only what the statistical
+	/// grid publishes. The control surface reads this: everything a slider moves is the trade's.
+	pub fn traded(&self) -> bool {
+		self.trade.is_some()
+	}
+
+	/// The trade half, both sides of it. Every caller is reached from a control the panel disables
+	/// without one, so arriving here is a bug in that gating and not a state to paper over.
+	fn trade(&self) -> (&Trade, &Traded) {
+		let (Some(t), Some(m)) = (&self.payload.trade, &self.trade) else {
+			panic!("{:?} was opened without a trade, and this quantity is one", self.payload.name)
+		};
+		(t, m)
 	}
 
 	pub fn n(&self) -> usize {
 		self.payload.place.len()
 	}
 
-	/// The tier controls at their opening positions.
+	/// The tier controls at their opening positions. Empty without a trade: there is nothing on the
+	/// ground to weigh.
 	pub fn tier_states(&self) -> Vec<TierState> {
 		self.payload
-			.tiers
+			.trade
 			.iter()
+			.flat_map(|t| &t.tiers)
 			.map(|t| TierState {
 				name: t.name.clone(),
 				weight: t.weight,
@@ -255,7 +277,7 @@ impl Model {
 	pub fn pressure(&self, lambda: f64, tiers: &[TierState]) -> Vec<f64> {
 		let cut2 = (CUTOFF * lambda) * (CUTOFF * lambda);
 		let mut press = vec![0.; self.n()];
-		for c in &self.comps {
+		for c in &self.trade().1.comps {
 			let t = &tiers[c.tier];
 			if !t.show {
 				continue;
@@ -277,7 +299,7 @@ impl Model {
 	}
 
 	pub fn unmet(&self, press: &[f64]) -> Vec<f64> {
-		self.payload.demand.iter().zip(press).map(|(d, p)| d / (1. + p)).collect()
+		self.trade().0.demand.iter().zip(press).map(|(d, p)| d / (1. + p)).collect()
 	}
 
 	/// One competitor's coverage cloud, cell by cell. `Share` is the Plackett–Luce share it takes of
@@ -290,10 +312,11 @@ impl Model {
 	/// bottom of it moves the answer where `pressure` only loses a rounding error.
 	fn cloud(&self, source: LayerRef, of: usize, lambda: f64, tiers: &[TierState]) -> Vec<f64> {
 		let n = self.n();
-		let Some(comp) = self.comps.get(of) else { return vec![0.; n] };
+		let (t, tm) = self.trade();
+		let Some(comp) = tm.comps.get(of) else { return vec![0.; n] };
 		match source {
 			LayerRef::Seen => {
-				let seen = &self.payload.pois[of].seen;
+				let seen = &t.pois[of].seen;
 				(0..n)
 					.map(|i| {
 						// the three nearest nodes and no others: over all of them the far field would
@@ -303,7 +326,7 @@ impl Model {
 							.iter()
 							.enumerate()
 							// a cell standing on a node takes that node's observation and nothing else
-							.map(|(k, s)| ((self.mx[i] - self.nx[k]).hypot(self.my[i] - self.ny[k]).powi(2).max(1.), *s))
+							.map(|(k, s)| ((self.mx[i] - tm.nx[k]).hypot(self.my[i] - tm.ny[k]).powi(2).max(1.), *s))
 							.collect();
 						d.sort_by(|a, b| a.0.total_cmp(&b.0));
 						let (mut num, mut den) = (0., 0.);
@@ -321,7 +344,7 @@ impl Model {
 			_ => {
 				let pull = |c: &Comp, i: usize| c.w * tiers[c.tier].weight * (-(self.mx[i] - c.mx).hypot(self.my[i] - c.my) / lambda).exp();
 				let mut den = vec![0.; n];
-				for c in self.comps.iter().filter(|c| tiers[c.tier].show && c.w * tiers[c.tier].weight > 0.) {
+				for c in tm.comps.iter().filter(|c| tiers[c.tier].show && c.w * tiers[c.tier].weight > 0.) {
 					for (i, d) in den.iter_mut().enumerate() {
 						*d += pull(c, i);
 					}
@@ -334,44 +357,48 @@ impl Model {
 		}
 	}
 
-	/// The three that move under the sliders, then whatever the study asked for.
+	/// The three that move under the sliders, then whatever the study asked for. Without a trade only
+	/// the second half exists — every layer above it is a function of demand, competitors, or both.
 	pub fn layers(&self) -> Vec<LayerSpec> {
-		let mut out = vec![
-			LayerSpec {
-				name: "Underserved demand  ★".to_owned(),
-				note: "Demand in the cell, divided down by how much competition already reaches it. This is the layer to shop for locations on.".to_owned(),
-				linear: false,
-				source: LayerRef::Unmet,
-			},
-			LayerSpec {
-				name: "Competitor pressure".to_owned(),
-				note: "Σ over competitors of weight × exp(−distance/λ). High = already saturated.".to_owned(),
-				linear: false,
-				source: LayerRef::Pressure,
-			},
-			LayerSpec {
-				name: "Demand".to_owned(),
-				note: self.payload.demand_note.clone(),
-				linear: false,
-				source: LayerRef::Demand,
-			},
-			LayerSpec {
-				name: "Coverage · modelled".to_owned(),
-				note: "The highlighted competitor's share of the cell: its strength against everything else reaching there. One global distance coefficient, so it is a circle — which is the control the observed layer is read against. Click a competitor to move the highlight.".to_owned(),
-				linear: true,
-				source: LayerRef::Share,
-			},
-		];
-		if !self.payload.nodes.is_empty() {
-			out.push(LayerSpec {
-				name: "Coverage · observed  ★".to_owned(),
-				note: format!(
-					"What the probe saw of the highlighted competitor at each of {} nodes, interpolated between them. Pure data: rank on the page, term weights applied, nothing modelled.",
-					self.payload.nodes.len()
-				),
-				linear: true,
-				source: LayerRef::Seen,
-			});
+		let mut out = Vec::new();
+		if let Some(t) = &self.payload.trade {
+			out.extend([
+				LayerSpec {
+					name: "Underserved demand  ★".to_owned(),
+					note: "Demand in the cell, divided down by how much competition already reaches it. This is the layer to shop for locations on.".to_owned(),
+					linear: false,
+					source: LayerRef::Unmet,
+				},
+				LayerSpec {
+					name: "Competitor pressure".to_owned(),
+					note: "Σ over competitors of weight × exp(−distance/λ). High = already saturated.".to_owned(),
+					linear: false,
+					source: LayerRef::Pressure,
+				},
+				LayerSpec {
+					name: "Demand".to_owned(),
+					note: t.demand_note.clone(),
+					linear: false,
+					source: LayerRef::Demand,
+				},
+				LayerSpec {
+					name: "Coverage · modelled".to_owned(),
+					note: "The highlighted competitor's share of the cell: its strength against everything else reaching there. One global distance coefficient, so it is a circle — which is the control the observed layer is read against. Click a competitor to move the highlight.".to_owned(),
+					linear: true,
+					source: LayerRef::Share,
+				},
+			]);
+			if !t.nodes.is_empty() {
+				out.push(LayerSpec {
+					name: "Coverage · observed  ★".to_owned(),
+					note: format!(
+						"What the probe saw of the highlighted competitor at each of {} nodes, interpolated between them. Pure data: rank on the page, term weights applied, nothing modelled.",
+						t.nodes.len()
+					),
+					linear: true,
+					source: LayerRef::Seen,
+				});
+			}
 		}
 		out.extend(self.payload.layers.iter().enumerate().map(|(i, l)| LayerSpec {
 			name: l.name.clone(),
@@ -387,7 +414,7 @@ impl Model {
 		match source {
 			LayerRef::Unmet => Cow::Borrowed(unmet),
 			LayerRef::Pressure => Cow::Borrowed(press),
-			LayerRef::Demand => Cow::Borrowed(&self.payload.demand),
+			LayerRef::Demand => Cow::Borrowed(&self.trade().0.demand),
 			LayerRef::Study(i) => Cow::Borrowed(&self.payload.layers[i].values),
 			LayerRef::Share | LayerRef::Seen => Cow::Owned(self.cloud(source, of, lambda, tiers)),
 		}
@@ -396,6 +423,7 @@ impl Model {
 	/// Huff-style: a candidate captures each cell's demand in proportion to its own distance-decayed
 	/// pull against all competition already reaching that cell.
 	pub fn capture_at(&self, mx: f64, my: f64, lambda: f64, press: &[f64]) -> f64 {
+		let demand = &self.trade().0.demand;
 		let cut2 = (CUTOFF * lambda) * (CUTOFF * lambda);
 		let mut cap = 0.;
 		for (i, p) in press.iter().enumerate() {
@@ -405,13 +433,14 @@ impl Model {
 				continue;
 			}
 			let pull = (-d2.sqrt() / lambda).exp();
-			cap += self.payload.demand[i] * pull / (pull + p);
+			cap += demand[i] * pull / (pull + p);
 		}
 		cap
 	}
 
 	/// Demand within 1 km and within 3 km.
 	pub fn demand_within(&self, mx: f64, my: f64) -> (f64, f64) {
+		let demand = &self.trade().0.demand;
 		let (mut d1, mut d3) = (0., 0.);
 		for i in 0..self.n() {
 			let (dx, dy) = (self.mx[i] - mx, self.my[i] - my);
@@ -419,9 +448,9 @@ impl Model {
 			if d2 > 9e6 {
 				continue;
 			}
-			d3 += self.payload.demand[i];
+			d3 += demand[i];
 			if d2 < 1e6 {
-				d1 += self.payload.demand[i];
+				d1 += demand[i];
 			}
 		}
 		(d1, d3)
@@ -430,20 +459,20 @@ impl Model {
 	/// Closest competitor and its distance in metres, over the whole inventory or one tier. Tier
 	/// visibility does not enter: what is on the ground is on the ground.
 	pub fn nearest(&self, mx: f64, my: f64, tier: Option<&str>) -> Option<(&PoiOut, f64)> {
-		self.payload
-			.pois
+		let (t, tm) = self.trade();
+		t.pois
 			.iter()
-			.zip(&self.comps)
+			.zip(&tm.comps)
 			.filter(|(p, _)| tier.is_none_or(|t| p.poi.tier == t))
 			.map(|(p, c)| (p, (c.mx - mx).hypot(c.my - my)))
 			.min_by(|a, b| a.1.total_cmp(&b.1))
 	}
 
 	pub fn within(&self, mx: f64, my: f64, r: f64, tier: Option<&str>) -> usize {
-		self.payload
-			.pois
+		let (t, tm) = self.trade();
+		t.pois
 			.iter()
-			.zip(&self.comps)
+			.zip(&tm.comps)
 			.filter(|(p, c)| tier.is_none_or(|t| p.poi.tier == t) && (c.mx - mx).hypot(c.my - my) < r)
 			.count()
 	}
@@ -466,7 +495,9 @@ impl Model {
 		for l in &self.payload.layers {
 			s.push_str(&format!("\n{} {}", l.name, fmt(l.values[i])));
 		}
-		s.push_str(&format!("\ndemand {} · pressure {:.2} · unmet {}", fmt(self.payload.demand[i]), press[i], fmt(unmet[i])));
+		if let Some(t) = &self.payload.trade {
+			s.push_str(&format!("\ndemand {} · pressure {:.2} · unmet {}", fmt(t.demand[i]), press[i], fmt(unmet[i])));
+		}
 		if self.payload.imputed[i] == 1 {
 			s.push_str("\n(imputed cell)");
 		}
@@ -476,11 +507,12 @@ impl Model {
 	/// Greedy top-N sweep over cell centroids, one candidate per 400 m and picks kept 1.5 km apart.
 	/// Returns the picks and how many cells were in the running.
 	pub fn rank_sites(&self, lambda: f64, press: &[f64], take: usize) -> (Vec<Ranked>, usize) {
+		let demand = &self.trade().0.demand;
 		// one candidate per 400 m: 200 m spacing buys nothing and quadruples the cost
 		let mut seen = std::collections::HashSet::new();
 		let mut cand = Vec::new();
 		for i in 0..self.n() {
-			if self.payload.demand[i] <= 0. {
+			if demand[i] <= 0. {
 				continue;
 			}
 			let key = ((self.mx[i] / 400. + 0.5).floor() as i64, (self.my[i] / 400. + 0.5).floor() as i64);
@@ -513,6 +545,20 @@ impl Model {
 	pub fn site_report(&self, at: [f64; 2], label: Option<&str>, name: Option<&str>, lambda: f64, press: &[f64], tiers: &[TierState]) -> Report {
 		let [lat, lng] = at;
 		let (mx, my) = self.to_local(lat, lng);
+		let cell = self.nearest_cell(mx, my);
+		let title = match label {
+			Some(l) => format!("{l} — {}", self.payload.place[cell]),
+			None => self.payload.place[cell].clone(),
+		};
+		if self.payload.trade.is_none() {
+			let mut rows: Vec<Row> = self.payload.layers.iter().map(|l| row(&l.name, fmt(l.values[cell]))).collect();
+			rows.push(row("Coordinates", format!("{lat:.5}, {lng:.5}")));
+			return Report {
+				title,
+				rows,
+				note: "This cell as the statistical grid publishes it. Pick a trade to get demand, the competitors already on the ground, and a capture score.".to_owned(),
+			};
+		}
 		let (d1, d3) = self.demand_within(mx, my);
 		let any = self.nearest(mx, my, None);
 		let km = |d: Option<f64>| d.map_or_else(|| "–".to_owned(), |d| format!("{:.2} km", d / 1000.));
@@ -541,10 +587,7 @@ impl Model {
 		}
 
 		Report {
-			title: match label {
-				Some(l) => format!("{l} — {}", self.payload.place[self.nearest_cell(mx, my)]),
-				None => self.payload.place[self.nearest_cell(mx, my)].clone(),
-			},
+			title,
 			rows,
 			note: "Capture = Σ demand × pull/(pull + existing pressure). Only meaningful when comparing candidates against each other; the number has no unit.".to_owned(),
 		}
@@ -553,7 +596,8 @@ impl Model {
 	/// Open here, under this name, with nothing on the board yet: what would Google's own ordering
 	/// make of it. Scored on the same per-tier scale `w` is, so `1.00` is the median rival.
 	pub fn opening_weight(&self, name: &str, lat: f64, lng: f64) -> f64 {
-		self.rank.strength(
+		let tm = self.trade().1;
+		tm.rank.strength(
 			&Biz {
 				name,
 				n_rev: 0.,
@@ -561,20 +605,14 @@ impl Model {
 				lat,
 				lng,
 			},
-			&self.terms,
-		) / self.scale
+			&tm.terms,
+		) / tm.scale
 	}
 
 	fn what_if(&self, name: &str, mx: f64, my: f64, lat: f64, lng: f64) -> Vec<Row> {
 		let w = self.opening_weight(name, lat, lng);
-		let near: Vec<f64> = self
-			.payload
-			.pois
-			.iter()
-			.zip(&self.comps)
-			.filter(|(_, c)| (c.mx - mx).hypot(c.my - my) < 2000.)
-			.map(|(p, _)| p.w)
-			.collect();
+		let (t, tm) = self.trade();
+		let near: Vec<f64> = t.pois.iter().zip(&tm.comps).filter(|(_, c)| (c.mx - mx).hypot(c.my - my) < 2000.).map(|(p, _)| p.w).collect();
 		vec![
 			Row {
 				label: format!("Open as {name:?}, no reviews"),

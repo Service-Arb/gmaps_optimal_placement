@@ -13,6 +13,9 @@ gmaps_optimal_placement serve --trades examples/trades --locations examples/loca
 # before the server starts, which is how a scripted run never meets the picker.
 gmaps_optimal_placement serve -t examples/trades/cleaning.nix -l examples/locations/Lyon.nix
 
+# The last row of the trade field is "no trade". Select it to see the city from the statistical grid
+# only. This map has no demand layer and no competitors, and it uses no Google Maps calls.
+
 # Chart the monthly search volume of each query group. Set the credentials of the provider first:
 # GOOGLE_ADS_{DEVELOPER_TOKEN,CLIENT_ID,CLIENT_SECRET,REFRESH_TOKEN,CUSTOMER_ID}, or
 # DATAFORSEO_{LOGIN,PASSWORD}. Each axis is picked through fzf.

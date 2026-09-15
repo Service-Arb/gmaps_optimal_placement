@@ -10,19 +10,31 @@ pub struct Payload {
 	pub name: String,
 	pub center: [f64; 2],
 	pub zoom: u8,
-	pub lambda_m: f64,
-	/// The demand expression itself — the map has no other honest caption for it.
-	pub demand_note: String,
 	/// 8 numbers per cell: (lon, lat) SW, SE, NE, NW.
 	pub ring: Vec<f64>,
 	pub place: Vec<String>,
 	pub imputed: Vec<u8>,
+	pub layers: Vec<LayerOut>,
+	pub candidates: Vec<Candidate>,
+	/// Absent when a location was opened without one. Everything above is the location's, comes out
+	/// of the statistical archive, and costs nothing to ask for.
+	pub trade: Option<Trade>,
+}
+
+/// The half of a payload a trade decides, and the whole of the half that is billed. One `Option`
+/// rather than eight, because a demand surface with no competitors under it is not a state this
+/// tool has anything to say about.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Trade {
+	/// Catchment decay, metres. The map's opening slider position.
+	pub lambda_m: f64,
+	/// The demand expression itself — the map has no other honest caption for it.
+	pub demand_note: String,
+	pub demand: Vec<f64>,
 	/// Days since the oldest competitor answer this map was painted from was written. `None` when
 	/// every one of them was bought on this run. Provenance, like `imputed`: nothing is evicted, so
 	/// without it a map drawn from two-year-old competitors looks like one drawn this morning.
 	pub inventory_age_d: Option<f64>,
-	pub demand: Vec<f64>,
-	pub layers: Vec<LayerOut>,
 	pub tiers: Vec<TierOut>,
 	/// The study's queries and what each is worth. `w` is already scored against them; the what-if
 	/// needs them because the business it scores does not exist yet.
@@ -31,7 +43,6 @@ pub struct Payload {
 	/// probed, which is what decides whether the map offers an observed coverage layer at all.
 	pub nodes: Vec<[f64; 2]>,
 	pub pois: Vec<PoiOut>,
-	pub candidates: Vec<Candidate>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -3,7 +3,7 @@
 //! The gradient check is the one that matters: a wrong derivative produces plausible, confidently
 //! wrong coefficients, and nothing downstream would notice.
 use gmaps_optimal_placement_core::{
-	Payload,
+	Payload, Trade,
 	payload::Poi,
 	rank::{self, Biz, DIST, Feats, N, NAME, NAMES, Obs, nll_grad, nodes},
 };
@@ -12,9 +12,14 @@ fn payload() -> Payload {
 	serde_json::from_str(include_str!("clermont_payload.json")).unwrap()
 }
 
+/// The frozen payload is a built study, so it carries the half a trade decides.
+fn trade() -> Trade {
+	payload().trade.expect("the Clermont fixture is a trade over a location")
+}
+
 fn feats() -> Feats {
 	let p = payload();
-	let rated: Vec<f64> = p.pois.iter().filter_map(|q| q.poi.rating).collect();
+	let rated: Vec<f64> = trade().pois.iter().filter_map(|q| q.poi.rating).collect();
 	Feats::try_new(rated.iter().sum::<f64>() / rated.len() as f64, &p.place).unwrap()
 }
 
@@ -87,12 +92,12 @@ fn a_known_coefficient_set_comes_back() {
 /// An accent-stripping or containment change shows up here as a diff before it shows up as a map.
 #[test]
 fn feature_vectors_over_three_shops() {
-	let p = payload();
+	let t = trade();
 	let f = feats();
 	let node = [45.7797, 3.0863];
 	let mut s = format!("{:<30} {}\n", "", NAMES.map(|n| format!("{n:>14}")).join(""));
 	for name in ["Ecolavage Clermont", "American Car Wash - Clermont-Ferrand Aubière", "EDEO DETAILING"] {
-		let q: &Poi = &p.pois.iter().find(|q| q.poi.name == name).unwrap().poi;
+		let q: &Poi = &t.pois.iter().find(|q| q.poi.name == name).unwrap().poi;
 		let x = f.at(&Biz::from(q), "lavage auto", Some(node));
 		s.push_str(&format!("{:<30} {}\n", name.chars().take(29).collect::<String>(), x.map(|v| format!("{v:>14.4}")).join("")));
 	}
@@ -107,8 +112,7 @@ fn feature_vectors_over_three_shops() {
 /// A rectangle has nobody standing in it, so its orderings carry no distance and can identify none.
 #[test]
 fn without_a_searcher_there_is_no_distance() {
-	let p = payload();
-	let q = &p.pois[0].poi;
+	let q = &trade().pois[0].poi;
 	assert_eq!(feats().at(&Biz::from(q), "lavage auto", None)[DIST], 0.);
 	assert!(feats().at(&Biz::from(q), "lavage auto", Some([45.9, 3.3]))[DIST] > 0.);
 }
@@ -148,7 +152,7 @@ fn the_split_hands_every_node_an_equal_share() {
 		})
 		.collect();
 	let n = 32;
-	let out = nodes(&at, &p.demand, n).unwrap();
+	let out = nodes(&at, &trade().demand, n).unwrap();
 	assert_eq!(out.len(), n);
 	assert!((out.iter().map(|k| k.share).sum::<f64>() - 1.).abs() < 1e-9, "the strata do not partition the demand");
 
