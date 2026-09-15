@@ -163,6 +163,13 @@ impl Work {
 		self.billed.get()
 	}
 
+	/// Answers served for `kind`, paid or not — one per page, which is one unit of
+	/// `SearchTextRequestPerDayPerProject` whatever the mask. `billed` counts only the misses, so
+	/// this is what a keyless walk can report and that one cannot.
+	pub(crate) fn calls(&self, kind: Kind) -> usize {
+		self.served.borrow().iter().filter(|(k, _)| *k == kind).count()
+	}
+
 	/// What was served out of the cache for `kind`, and whether the oldest is past its age. `None`
 	/// when this run served nothing of that kind.
 	pub fn age(&self, kind: Kind) -> Option<Aged> {

@@ -162,13 +162,22 @@ fn sweep(cfg: &PoiConfig, bbox: Bbox, key: Option<&str>, work: &Work) -> Result<
 
 	let mut found = Found::default();
 	for q in &cfg.queries {
+		let (before, spent) = (found.raw.len(), work.calls(Kind::Inventory));
 		// every answer that arrived is already on disk and the recursion is deterministic, so whatever
 		// stopped this — a daily quota above all — a rerun picks up where it stopped and pays only for
 		// what is still missing
 		descend(work, key, q, bbox, 0, &mut found).wrap_err_with(|| format!("sweeping {q:?}: a rerun resumes from here, and re-asks nothing already answered"))?;
-		eprintln!("  {q:?}: {} orderings, {} billed so far", found.obs.len(), work.billed());
+		// new, not returned: the queries overlap by design, and what the eighth one adds over the seven
+		// before it is what says whether it earns its calls
+		eprintln!(
+			"  {q:?}: {} new of {} calls, {} orderings, {} billed so far",
+			found.raw.len() - before,
+			work.calls(Kind::Inventory) - spent,
+			found.obs.len(),
+			work.billed()
+		);
 	}
-	let Found { raw, obs, censored, missing } = found;
+	let Found { raw, obs, censored, missing, calls } = found;
 	if let Some(a) = work.age(Kind::Inventory) {
 		eprintln!("places: served from cache, {a}");
 		if a.stale {
@@ -222,6 +231,11 @@ fn sweep(cfg: &PoiConfig, bbox: Bbox, key: Option<&str>, work: &Work) -> Result<
 	}
 	out.sort_by(|a, b| b.n_rev.total_cmp(&a.n_rev));
 	eprintln!("places: {} raw over {} searches ({} billed), {} kept", raw.len(), obs.len(), work.billed(), out.len());
+	let (total, interior) = calls.iter().fold((0, 0), |(t, i), (c, q)| (t + c, i + q));
+	eprintln!("places: {total} calls, {interior} on tiles that quartered and were re-covered by their four children:");
+	for (d, (c, q)) in calls.iter().enumerate().filter(|(_, (c, _))| *c > 0) {
+		eprintln!("  depth {d}: {c} calls, {q} of them interior");
+	}
 	Ok(Inventory { pois: out, obs, missing })
 }
 
@@ -243,7 +257,10 @@ fn descend(work: &Work, key: Option<&str>, query: &str, tile: Bbox, depth: u32, 
 	if work.refreshing() || work.cached(SEARCH_TEXT, &body)?.is_none() {
 		found.missing += 1;
 	}
+	let spent = work.calls(Kind::Inventory);
 	let page = search_text(work, key, &body, FIELDS, 3, Kind::Inventory)?;
+	let paged = work.calls(Kind::Inventory) - spent;
+	found.calls[depth as usize].0 += paged;
 	// an ordering of nothing identifies nothing, and under a read-only key it is also what a tile
 	// that was never harvested looks like
 	if page.is_empty() {
@@ -264,6 +281,7 @@ fn descend(work: &Work, key: Option<&str>, query: &str, tile: Bbox, depth: u32, 
 		found.censored.push((query.to_owned(), tile));
 		return Ok(());
 	}
+	found.calls[depth as usize].1 += paged;
 	let (mid_lat, mid_lon) = ((tile.lat[0] + tile.lat[1]) / 2., (tile.lon[0] + tile.lon[1]) / 2.);
 	for lat in [[tile.lat[0], mid_lat], [mid_lat, tile.lat[1]]] {
 		for lon in [[tile.lon[0], mid_lon], [mid_lon, tile.lon[1]]] {
@@ -281,6 +299,8 @@ struct Found {
 	/// Query and tile still at the cap at the depth floor: the inventory under them is partial.
 	censored: Vec<(String, Bbox)>,
 	missing: usize,
+	/// Per depth: calls made, and how many of those were on a tile that then quartered.
+	calls: [(usize, usize); DEPTH as usize + 1],
 }
 
 struct Matcher {
