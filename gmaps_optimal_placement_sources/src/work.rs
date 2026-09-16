@@ -3,16 +3,21 @@
 //! Nothing here expires. An answer past the age its kind allows is still served and its age is
 //! reported, because the alternative — refetching — spends a day of quota to learn the same thing,
 //! and the quota is the scarce side. What the ages buy is a map that says how old it is.
+//!
+//! Nothing here counts the quota either. `SearchTextRequestPerDayPerProject` is not readable with an
+//! API key, so a local tally is a guess about a number two other runs and yesterday's clock all move
+//! — and a guess that refuses is a guess that stops work Google would have served. What a sweep is
+//! about to ask for is stated before it asks, out of what the cache is missing; what is actually
+//! left is Google's to say, and it says it in the 429.
 use std::{
 	cell::{Cell, RefCell},
 	fs,
 	io::Read,
 	path::{Path, PathBuf},
-	time::{Duration, SystemTime, UNIX_EPOCH},
+	time::{Duration, SystemTime},
 };
 
 use eyre::{Result, WrapErr, bail};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// What an answer is about, which is what says how old it may get before the map says so.
@@ -56,11 +61,6 @@ impl Default for Age {
 	}
 }
 const YEAR: Duration = Duration::from_secs(365 * 86_400);
-const DAY: u64 = 86_400;
-/// Seconds past midnight UTC at which `SearchTextRequestPerDayPerProject` resets — midnight
-/// US/Pacific, which moves by an hour twice a year. Corrected from any 429, which carries the
-/// window's own start.
-const WINDOW_PHASE: u64 = 7 * 3600;
 /// The one quota a sweep runs out of.
 const QUOTA: &str = "SearchTextRequestPerDayPerProject";
 
@@ -77,20 +77,13 @@ impl std::fmt::Display for Aged {
 	}
 }
 
-/// How many searches something is about to need. A sweep cannot say exactly — a tile at the
-/// result cap opens four more — and a lower bound announced as an exact number is a lie the
-/// refusal would be built on.
+/// How many searches something is about to ask for. A sweep cannot say exactly — a tile at the
+/// result cap opens four more — so the two cases are distinguished rather than averaged into a
+/// number that reads as certain.
 #[derive(Clone, Copy, Debug)]
-pub enum Need {
+pub(crate) enum Need {
 	Exact(usize),
 	AtLeast(usize),
-}
-impl Need {
-	fn count(self) -> usize {
-		match self {
-			Self::Exact(n) | Self::AtLeast(n) => n,
-		}
-	}
 }
 impl std::fmt::Display for Need {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -108,7 +101,6 @@ pub struct Work {
 	/// read, and a Google error body is the only thing that says which quota ran out.
 	agent: ureq::Agent,
 	age: Age,
-	per_day: u32,
 	/// Re-ask every billed request and overwrite what it answered. The only thing that spends on a
 	/// question already answered; age alone never does.
 	refresh: bool,
@@ -129,7 +121,6 @@ impl Work {
 			billed: Cell::new(0),
 			agent: ureq::Agent::config_builder().http_status_as_error(false).build().new_agent(),
 			age: Age::default(),
-			per_day: 100,
 			refresh: false,
 			served: RefCell::default(),
 		}
@@ -137,9 +128,8 @@ impl Work {
 
 	/// The policy the CLI resolved out of its config. Plain values rather than the config type, so
 	/// `_sources` stands alone and the wasm side never sees the settings crate.
-	pub fn policy(mut self, age: Age, per_day: u32) -> Self {
+	pub fn policy(mut self, age: Age) -> Self {
 		self.age = age;
-		self.per_day = per_day;
 		self
 	}
 
@@ -200,22 +190,31 @@ impl Work {
 		self.served.borrow_mut().push((kind, age));
 	}
 
-	/// Refuses before anything spends. The message names the shortfall rather than the call that
-	/// would have failed, because a sweep that dies a third of the way through has already burnt the
-	/// window it needed.
-	pub fn preflight(&self, what: &str, need: Need) -> Result<()> {
-		let l = self.ledger()?;
-		let left = self.per_day.saturating_sub(l.spent);
-		if need.count() as u64 <= left as u64 {
-			return Ok(());
+	/// What this is about to ask Google for, said before it asks. A report and never a refusal:
+	/// what is left of the quota is not knowable from here, and a sweep stopped by a guess costs
+	/// exactly as much as one Google stopped, minus what it would have found.
+	pub(crate) fn announce(&self, what: &str, need: Need) {
+		match need {
+			Need::Exact(0) | Need::AtLeast(0) => eprintln!("{what}: answered in full from the work dir, nothing to buy"),
+			_ => eprintln!("{what}: {need} searches are not in the work dir and will be bought"),
 		}
-		let reset = l.window_start + DAY;
-		bail!(
-			"refusing to start: {what} needs {need} more searches,\nand {left} of today's {} remain (window resets {:02}:{:02} UTC).\nraise {QUOTA}, or rerun after the reset —\nnothing already answered is re-asked.",
-			self.per_day,
-			reset % DAY / 3600,
-			reset % 3600 / 60,
-		)
+	}
+
+	/// A path under the work dir for something derived from what is already there, named by a key its
+	/// inputs decide. Nothing here expires either: a key covers everything the answer depends on, so a
+	/// changed input is a different file rather than a stale one.
+	pub(crate) fn derived(&self, sub: &str, name: &str) -> Result<PathBuf> {
+		Ok(self.dir(sub)?.join(name))
+	}
+
+	/// The name of such a file. Twelve bytes: this is a cache key and not a signature.
+	pub(crate) fn digest(parts: &[&str]) -> String {
+		let mut h = Sha256::new();
+		for p in parts {
+			h.update(p.as_bytes());
+			h.update([0]);
+		}
+		hex(&h.finalize()[..12])
 	}
 
 	fn dir(&self, sub: &str) -> Result<PathBuf> {
@@ -274,15 +273,11 @@ impl Work {
 		// one cached 429 would answer for that request forever
 		if !status.is_success() {
 			if url == crate::poi::SEARCH_TEXT {
-				self.exhausted(&text)?;
+				self.exhausted(&text);
 			}
 			bail!("POST {url} -> {status}\n{}", text.trim());
 		}
 		self.billed.set(self.billed.get() + 1);
-		// the search-volume providers come through here too, and they are other people's quotas
-		if url == crate::poi::SEARCH_TEXT {
-			self.spend()?;
-		}
 		let json: serde_json::Value = serde_json::from_str(&text).wrap_err_with(|| format!("POST {url} returned non-JSON: {}", &text[..text.len().min(400)]))?;
 		fs::write(&dst, &text)?;
 		Ok((json, SystemTime::now()))
@@ -316,48 +311,11 @@ impl Work {
 		Ok((json, SystemTime::now()))
 	}
 
-	fn ledger_path(&self) -> Result<PathBuf> {
-		Ok(self.dir("")?.join("places_budget.json"))
-	}
-
-	/// What the window holds, rolled forward to today. Read per call rather than held: two runs of
-	/// this binary share one project's quota.
-	fn ledger(&self) -> Result<Ledger> {
-		let now = now_s();
-		let path = self.ledger_path()?;
-		let mut l = match fs::read(&path) {
-			Ok(b) => serde_json::from_slice(&b).wrap_err_with(|| format!("{} is not a quota ledger", path.display()))?,
-			Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ledger {
-				window_start: now - (now - WINDOW_PHASE) % DAY,
-				spent: 0,
-			},
-			Err(e) => return Err(e).wrap_err_with(|| format!("reading {}", path.display())),
-		};
-		// whole days, so the boundary keeps the phase a 429 taught it
-		let elapsed = now.saturating_sub(l.window_start);
-		if elapsed >= DAY {
-			l.window_start += elapsed / DAY * DAY;
-			l.spent = 0;
-		}
-		Ok(l)
-	}
-
-	fn write_ledger(&self, l: &Ledger) -> Result<()> {
-		let path = self.ledger_path()?;
-		fs::write(&path, serde_json::to_string(l)?).wrap_err_with(|| format!("writing {}", path.display()))
-	}
-
-	fn spend(&self) -> Result<()> {
-		let mut l = self.ledger()?;
-		l.spent += 1;
-		self.write_ledger(&l)
-	}
-
-	/// A refusal that names the daily search quota says what this ledger was guessing at: when the
-	/// window started, and how big it is. Take the first and report the second — the limit is the
-	/// config's to state.
-	fn exhausted(&self, body: &str) -> Result<()> {
-		let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else { return Ok(()) };
+	/// A 429 naming the daily search quota is the only place the real number is ever visible: an API
+	/// key cannot read it — `serviceusage` answers `API_KEY_SERVICE_BLOCKED` and `monitoring` refuses
+	/// keys outright. Report what it says and let the error carry the rest.
+	fn exhausted(&self, body: &str) {
+		let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else { return };
 		let Some(m) = v["error"]["details"]
 			.as_array()
 			.into_iter()
@@ -365,36 +323,19 @@ impl Work {
 			.map(|d| &d["metadata"])
 			.find(|m| m["quota_limit"].as_str() == Some(QUOTA))
 		else {
-			return Ok(());
+			return;
 		};
-		let mut l = self.ledger()?;
-		if let Some(start) = m["window_start_time"].as_str().and_then(|s| s.parse::<u64>().ok()) {
-			l.window_start = start;
+		let limit = m["quota_limit_value"].as_str().unwrap_or("?");
+		let reset = m["window_start_time"].as_str().and_then(|s| s.parse::<u64>().ok()).map(|start| start + 86_400);
+		eprintln!("{QUOTA} is spent — the project's limit is {limit} a day.");
+		if let Some(r) = reset {
+			eprintln!(
+				"  the window resets at {:02}:{:02} UTC; nothing already answered is re-asked, so a rerun pays only for the rest",
+				r % 86_400 / 3600,
+				r % 3600 / 60
+			);
 		}
-		l.spent = self.per_day;
-		self.write_ledger(&l)?;
-		if let Some(limit) = m["quota_limit_value"].as_str().and_then(|s| s.parse::<u32>().ok())
-			&& limit != self.per_day
-		{
-			eprintln!("{QUOTA} is {limit}, not the {} this is configured for — set `places.per_day` to {limit}", self.per_day);
-		}
-		Ok(())
 	}
-}
-
-/// `{window_start, spent}` under the work dir. `SearchTextRequestPerDayPerProject` is not readable
-/// with an API key — `serviceusage` answers `API_KEY_SERVICE_BLOCKED` and `monitoring` refuses API
-/// keys outright — and both want an OAuth2 principal for a number that `cached_post`, the one place
-/// a billed request leaves from, can count locally.
-#[derive(Debug, Deserialize, Serialize)]
-struct Ledger {
-	/// Unix seconds.
-	window_start: u64,
-	spent: u32,
-}
-
-fn now_s() -> u64 {
-	SystemTime::now().duration_since(UNIX_EPOCH).expect("the clock is after 1970").as_secs()
 }
 
 fn mtime(p: &Path) -> Result<SystemTime> {
@@ -413,29 +354,25 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
 	use super::*;
 
-	/// The body a spent window actually returns, trimmed to the detail the ledger reads.
+	/// The body a spent window actually returns, trimmed to the detail the message reads.
 	const REFUSAL: &str = r#"{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[
 		{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED","metadata":{
 			"window_start_time":"1789369200","quota_limit_value":"100",
 			"quota_metric":"places.googleapis.com/SearchTextRequest",
 			"quota_limit":"SearchTextRequestPerDayPerProject"}}]}}"#;
 
+	/// A malformed refusal must not take the process down on the way to reporting the real error.
 	#[test]
-	fn a_refusal_closes_the_window_it_names() {
+	fn a_refusal_is_read_for_what_it_says_and_nothing_is_written() {
 		let tmp = std::env::temp_dir().join("gop_work_refusal");
 		let _ = fs::remove_dir_all(&tmp);
 		let work = Work::at(&tmp);
 
-		work.exhausted(REFUSAL).unwrap();
-		// rolled forward by whole days, so the boundary a 429 taught it survives
-		assert_eq!(work.ledger().unwrap().window_start % DAY, WINDOW_PHASE);
+		work.exhausted(REFUSAL);
+		work.exhausted("not json at all");
+		work.exhausted(r#"{"error":{}}"#);
+		assert!(!tmp.join("places_budget.json").exists(), "nothing about the quota is kept on disk");
 
-		work.write_ledger(&Ledger { window_start: now_s(), spent: 98 }).unwrap();
-		work.preflight("a study", Need::Exact(2)).unwrap();
-		let refused = work.preflight("a study", Need::AtLeast(3)).unwrap_err().to_string();
-		assert!(refused.contains("at least 3"), "{refused}");
-		assert!(refused.contains("2 of today's 100"), "{refused}");
-
-		fs::remove_dir_all(&tmp).unwrap();
+		let _ = fs::remove_dir_all(&tmp);
 	}
 }

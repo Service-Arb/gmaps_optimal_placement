@@ -1,6 +1,6 @@
 //! What the tool does, rather than what a study is about. A study document is the two axes of the
-//! product and nothing else; anything that would be the same for every study — the quota it spends
-//! against, how old an answer may get before the map says so — lives here.
+//! product and nothing else; anything that would be the same for every study — how old an answer may
+//! get before the map says so — lives here.
 use gmaps_optimal_placement_sources::work::Age as Ages;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -13,23 +13,11 @@ use v_utils::{
 #[derive(Clone, ConfigJsonSchema, Debug, MyConfigPrimitives, Settings)]
 pub struct AppConfig {
 	#[settings(flatten)]
-	pub places: Places,
-	#[settings(flatten)]
 	pub age: Age,
 }
 
-#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize, SettingsNested, SmartDefault)]
-#[serde(default)]
-pub struct Places {
-	/// `SearchTextRequestPerDayPerProject`. An API key cannot read a project's quota — both
-	/// `serviceusage` and `monitoring` want an OAuth2 principal — so it is stated here, counted
-	/// locally, and corrected from any 429 naming a different one.
-	#[default(100)]
-	pub per_day: u32,
-}
-
 /// How old an answer may get before the map says so. Nothing is evicted and nothing is refetched:
-/// a refetch spends a day of the quota above to learn what is mostly the same thing, so age is
+/// a refetch spends a day of Google's quota to learn what is mostly the same thing, so age is
 /// reported and `--refresh` is the only thing that re-asks.
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize, SettingsNested, SmartDefault)]
 #[serde(default)]

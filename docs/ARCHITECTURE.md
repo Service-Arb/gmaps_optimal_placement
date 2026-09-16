@@ -134,11 +134,14 @@ app, so every entry point in `map_core.js` returns a banner string instead.
   and its age rides onto the map beside the imputed flag. Google's daily search quota is the scarce
   side, and refetching spends a day of it to learn what is mostly the same thing; `--refresh` is the
   only thing that re-asks. Age is a caption, never a trigger.
-- **A run that would not finish does not start.** `SearchTextRequestPerDayPerProject` is a hard
-  hundred a day and no API key can read what is left of it, so a ledger beside the cache counts what
-  `Work::cached_post` sent and every subcommand that spends states its need first. A sweep that dies
-  two thirds of the way through has already burnt the window it needed, and what it bought is a
-  partial inventory that looks whole.
+- **A cache key covers everything its answer depends on**, so a changed input is a different file
+  rather than a stale one and nothing needs invalidating. A derived answer is cached only where it is
+  reproducible from what is kept: the grid extract keeps the archive's own rows and re-parses them,
+  because caching the floats would need a round-trip no text format gives.
+- **What a run is about to spend is stated, never guessed at.** No API key can read what is left of
+  `SearchTextRequestPerDayPerProject`, so a local tally could only ever refuse work Google would have
+  served. What the work dir is missing is counted and announced before anything is bought; what
+  remains is Google's to say, in the 429.
 
 ## Sources are an enum
 

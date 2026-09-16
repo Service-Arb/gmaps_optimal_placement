@@ -141,8 +141,7 @@ impl Study {
 			eprintln!("{} nodes, biased {:.1} km", nodes.len(), self.radius_m()? / 1000.);
 			let need = probe::unanswered(work, &plan)?;
 			eprintln!("{} searches, {need} still unanswered: {need} Text Search Essentials", plan.len());
-			// the same refusal a run would meet, before it has a key in hand to meet it with
-			return work.preflight(&self.name, sources::work::Need::Exact(need)).map(|()| Vec::new());
+			return Ok(Vec::new());
 		}
 		let out = probe::run(work, &self.name, plan)?;
 		eprintln!("probe: {} orderings over {} billed calls", out.len(), work.billed());

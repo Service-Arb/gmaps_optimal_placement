@@ -46,7 +46,7 @@ pub fn plan(nodes: &[[f64; 2]], terms: &[String], radius_m: f64) -> Vec<(Ranking
 /// Calls at most `PAGES` per plan entry. Cached, so a rerun is free.
 pub fn run(work: &Work, what: &str, plan: Vec<(Ranking, serde_json::Value)>) -> Result<Vec<Ranking>> {
 	let key = std::env::var("GOOGLE_MAPS_KEY").wrap_err("GOOGLE_MAPS_KEY is not set")?;
-	work.preflight(what, Need::Exact(unanswered(work, &plan)?))?;
+	work.announce(what, Need::Exact(unanswered(work, &plan)?));
 	plan.into_iter()
 		.map(|(mut r, body)| {
 			r.ids = poi::search_text(work, Some(&key), &body, MASK, PAGES, Kind::Ordering)?.into_iter().map(|(id, _)| id).collect();

@@ -16,6 +16,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::work::{Kind, Work};
 
+/// Distinguishes one in-flight scan from another inside a process, as the pid does across them.
+static PARTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum GridSource {
 	/// INSEE Filosofi — France, 200 m, households / housing type / standard of living.
@@ -51,17 +54,60 @@ impl GridSource {
 	}
 }
 
+/// The cells of one frame, out of an archive that holds a country's worth.
+///
+/// The scan reads every row the archive has — 2.3 million for France — to keep the ten thousand
+/// inside the frame, and the answer never moves: the archive is a fixed vintage and the frame is the
+/// study's. So the rows it kept are written out beside it, verbatim, and a rerun reads those.
+///
+/// Rows and not cells: the numbers on a cell are parsed and reprojected from this text, and a cache
+/// of the results would have to round-trip a float exactly to be the same grid. Keeping the input
+/// and running the same code over it needs no such promise.
 pub fn load(source: GridSource, vintage: u16, bbox: Bbox, work: &Work) -> Result<Grid> {
 	let a = source.archive(vintage)?;
 	let proj = Reproject::try_new()?;
-	let [x0, y0, x1, y1] = bbox.to_laea(&proj)?;
+	let key = Work::digest(&[&format!("{source:?}"), &vintage.to_string(), &serde_json::to_string(&bbox)?]);
+	let kept = work.derived("data/extract", &format!("{key}.csv"))?;
 
-	let path = work.archive(a.url)?;
-	let file = std::fs::File::open(&path).wrap_err_with(|| format!("opening {}", path.display()))?;
-	let mut zip = zip::ZipArchive::new(std::io::BufReader::new(file)).wrap_err_with(|| format!("{} is not a zip", path.display()))?;
-	let member = zip.by_name(a.member).wrap_err_with(|| format!("{} has no member {:?}", path.display(), a.member))?;
-	let mut rdr = csv::ReaderBuilder::new().from_reader(std::io::BufReader::with_capacity(1 << 20, member));
+	let mut grid = match (!work.refreshing()).then(|| std::fs::File::open(&kept).ok()).flatten() {
+		Some(f) => {
+			let mut rdr = csv::ReaderBuilder::new().from_reader(std::io::BufReader::new(f));
+			let grid = collect(&a, bbox.to_laea(&proj)?, &proj, &mut rdr, None)?;
+			eprintln!("{:?}: {} cells, off the rows an earlier scan kept", a.member, grid.len());
+			grid
+		}
+		None => {
+			let path = work.archive(a.url)?;
+			let file = std::fs::File::open(&path).wrap_err_with(|| format!("opening {}", path.display()))?;
+			let mut zip = zip::ZipArchive::new(std::io::BufReader::new(file)).wrap_err_with(|| format!("{} is not a zip", path.display()))?;
+			let member = zip.by_name(a.member).wrap_err_with(|| format!("{} has no member {:?}", path.display(), a.member))?;
+			let mut rdr = csv::ReaderBuilder::new().from_reader(std::io::BufReader::with_capacity(1 << 20, member));
+			// written aside under a name no other scan can be using, and renamed into place: two runs
+			// over one frame are one file, and a scan that dies leaves no half a frame to be read as whole
+			let part = kept.with_extension(format!("{}.{}.part", std::process::id(), PARTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+			let mut out = csv::Writer::from_path(&part).wrap_err_with(|| format!("creating {}", part.display()))?;
+			let grid = collect(&a, bbox.to_laea(&proj)?, &proj, &mut rdr, Some(&mut out))?;
+			out.flush()?;
+			drop(out);
+			std::fs::rename(&part, &kept)?;
+			grid
+		}
+	};
+	ensure!(!grid.is_empty(), "no {source:?} cell falls inside {bbox:?}");
 
+	if source == GridSource::InseeFilosofi200m {
+		let labels = commune_names(&grid.cells.iter().map(|c| c.place.clone()).collect(), work)?;
+		for cell in &mut grid.cells {
+			cell.place = labels[&cell.place].clone();
+		}
+	}
+	Ok(grid)
+}
+
+/// Every row inside the frame, as cells. `keep` is where a scan of the whole archive writes the rows
+/// it is keeping; reading those back comes through here again with nothing to write.
+fn collect<R: std::io::Read>(a: &Archive, frame: [f64; 4], proj: &Reproject, rdr: &mut csv::Reader<R>, mut keep: Option<&mut csv::Writer<std::fs::File>>) -> Result<Grid> {
+	let [x0, y0, x1, y1] = frame;
 	let header: Vec<String> = rdr.headers()?.iter().map(str::to_owned).collect();
 	let at = |name: &str| {
 		header
@@ -75,6 +121,9 @@ pub fn load(source: GridSource, vintage: u16, bbox: Bbox, work: &Work) -> Result
 		at(t)?;
 	}
 	let numeric: Vec<usize> = (0..header.len()).filter(|i| !a.text_cols.contains(&header[*i].as_str())).collect();
+	if let Some(w) = keep.as_deref_mut() {
+		w.write_record(&header)?;
+	}
 
 	let mut grid = Grid::default();
 	let (mut scanned, mut row) = (0usize, csv::StringRecord::new());
@@ -102,22 +151,19 @@ pub fn load(source: GridSource, vintage: u16, bbox: Bbox, work: &Work) -> Result
 			},
 			None => false,
 		};
+		if let Some(w) = keep.as_deref_mut() {
+			w.write_record(row.iter())?;
+		}
 		let cell = Cell {
 			id: id.to_owned(),
 			place: row[i_place].split(',').next().unwrap_or_default().to_owned(),
-			ring: cell.ring(&proj)?,
+			ring: cell.ring(proj)?,
 			imputed,
 		};
 		grid.push(cell, &values)?;
 	}
-	eprintln!("{:?}: scanned {scanned} cells, kept {}", a.member, grid.len());
-	ensure!(!grid.is_empty(), "no {source:?} cell falls inside {bbox:?}");
-
-	if source == GridSource::InseeFilosofi200m {
-		let labels = commune_names(&grid.cells.iter().map(|c| c.place.clone()).collect(), work)?;
-		for cell in &mut grid.cells {
-			cell.place = labels[&cell.place].clone();
-		}
+	if keep.is_some() {
+		eprintln!("{:?}: scanned {scanned} cells, kept {}", a.member, grid.len());
 	}
 	Ok(grid)
 }
