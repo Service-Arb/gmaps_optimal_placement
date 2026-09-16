@@ -77,6 +77,8 @@ async function main() {
   const rows = n => evaluate(`[...${col(n)}.querySelectorAll('li')].map(l => l.textContent)`);
   const pick = (n, name) => evaluate(`[...${col(n)}.querySelectorAll('li')].find(l => l.textContent === ${JSON.stringify(name)}).click()`);
   const take = () => evaluate("document.querySelector('#picker button.go').click()");
+  const picked = n => evaluate(`${col(n)}.querySelector('li.on')?.textContent ?? null`);
+  const loadable = () => evaluate("!document.querySelector('#picker button.go').disabled");
   const settled = () =>
     evaluate("document.querySelectorAll('#ctl select option').length > 0 && !!document.querySelector('canvas')").catch(() => false);
   // the panel is server-rendered empty and filled by the island, so its contents are the only
@@ -88,7 +90,7 @@ async function main() {
       if (await evaluate("!!document.querySelector('#picker .col input')").catch(() => false)) break;
       await sleep(500);
     }
-    // a click lands a cursor and nothing else, so the pairing is taken on its own
+    // a click picks its own box and no more, so the loading is asked for on its own
     await pick(0, "car_detailing");
     await pick(1, "Clermont-Ferrand");
     await take();
@@ -268,15 +270,22 @@ async function main() {
   await press("c");
   await press("l");
   await press("e");
-  assert.deepEqual(await rows(0), ["cleaning"], "the caret starts in the trade field");
+  assert.deepEqual(await rows(0), ["cleaning"], "the caret starts in the trade box");
   assert.deepEqual(await rows(1), ["Clermont-Ferrand", "Lyon"], "and narrowing the trade leaves the locations alone");
+  await stroke("Enter", 13);
+  assert.equal(await picked(0), "cleaning", "Enter picks the box it is in");
+  assert(!(await loadable()), "and one box of two is not something to load");
+  // the pick is a value and not a row, so the query it was found through is free to move after
+  await stroke("Backspace", 8);
+  assert.deepEqual(await rows(0), ["car_detailing", "cleaning"], "widening the query brings the other trades back");
+  assert.equal(await picked(0), "cleaning", "and leaves the pick where it was made");
   await stroke("Tab", 9);
   await press("C");
-  assert.deepEqual(await rows(1), ["Clermont-Ferrand"], "Tab crosses to the location field");
-  assert.deepEqual(await rows(0), ["cleaning"], "without disturbing the trade behind it");
-  // Enter crosses as Tab does; only Ctrl+Enter and the button spend both fields at once
+  assert.deepEqual(await rows(1), ["Clermont-Ferrand"], "Tab crosses to the location box");
+  assert.deepEqual(await picked(1), null, "which has picked nothing yet");
   await stroke("Enter", 13);
   assert(await evaluate("!!document.querySelector('#picker')"), "Enter alone leaves the picker up");
+  assert(await loadable(), "with both boxes picked, and so something to load");
   await stroke("Enter", 13, 2);
   // the second pairing is evaluated on this request, which reads the grid archive again
   for (let i = 0; i < 240; i++) {

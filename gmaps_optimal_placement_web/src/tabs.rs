@@ -8,20 +8,20 @@
 //!   GET /studies.json   trades, locations: the two axes the CLI was given
 //!                       open:              the pairing it was named, if it was named one
 //!        │
-//!   ┌────┴──── t ─→ Pool::Study    two fields, what and where; Enter crosses, Ctrl-Enter takes
+//!   ┌────┴──── t ─→ Pool::Study    two boxes, what and where; Enter picks, Ctrl-Enter loads
 //!   │  Picker                      ↑ also where a served product starts
 //!   │                              the trade field ends in NO_TRADE — the city, unpriced
 //!   └───────── f ─→ Pool::Open     filter the open tabs, switch to one
 //! ```
 //!
-//! One field per axis rather than one list of every pairing: a study is a point on a product, and
-//! an agglomeration times a trade list is a long list to read when what you know is one coordinate.
-//! Both fields are live at once, so a pairing is two narrowings in either order — which is what a
-//! step sequence could not do, having already spent the first choice by the time the second is on
-//! screen.
+//! One box per axis rather than one list of every pairing: a study is a point on a product, and an
+//! agglomeration times a trade list is a long list to read when what you know is one coordinate.
+//! Both boxes are live at once, so a pairing is two choices in either order — which is what a step
+//! sequence could not do, having already spent the first choice by the time the second is on
+//! screen. Neither box loads anything on its own; the `↵` button spends the pair.
 //!
-//! [`NO_TRADE`] sits at the end of the trade field rather than at its head: a city on its own is
-//! the cheap question, not the usual one, and the cursor opens on whatever a field's first row is.
+//! [`NO_TRADE`] sits at the end of the trade box rather than at its head: a city on its own is the
+//! cheap question, not the usual one, and the cursor opens on whatever a box's first row is.
 //!
 //! This is the only picker: `serve` does not run `fzf` over a directory, because choosing the first
 //! study and choosing the fourth should not be two different motions.
@@ -40,16 +40,16 @@ use crate::map::State;
 /// every layer a trade did not add and not one billed call.
 pub const NO_TRADE: &str = "(no trade · grid only)";
 
-/// Which set the picker is filtering, and so how many fields it puts up.
+/// Which set the picker is filtering, and so how many boxes it puts up.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pool {
-	/// The product served, as one field per axis. Taking it opens the tab.
+	/// The product served, as one box per axis. Loading the pair opens the tab.
 	Study,
-	/// The open tabs; taking one switches to it.
+	/// The open tabs; loading one switches to it.
 	Open,
 }
 impl Pool {
-	/// How many fields it puts up: one per axis being crossed.
+	/// How many boxes it puts up: one per axis being crossed.
 	fn cols(self) -> usize {
 		match self {
 			Self::Study => 2,
@@ -190,20 +190,20 @@ pub fn TabBar(state: State) -> impl IntoView {
 	}
 }
 
-/// ↑/↓ (and `Ctrl-P`/`Ctrl-N`) clamp at both ends rather than wrap, `Tab` and `Enter` cross to the
-/// other field, `Ctrl-Enter` and the `↵` button take what the fields have highlighted, `Escape`
-/// closes. A cursor sits on its field's first hit, as `fzf`'s does, and every edit of that query
-/// puts it back there — so a pairing is only ever one field away from being the one on screen.
+/// One selection box per axis: a query narrows its list, `Enter` or a click picks the row, and the
+/// pick stays put — it is a value, not a row number, so editing the query after does not move it.
+/// `Ctrl-Enter` and the `↵` button load what the boxes hold, and nothing else does; `Escape` closes.
 ///
-/// The cursor is a pre-selection: arrows move it, and so does the mouse passing over a row. A click
-/// settles it, which is what `Enter` does and no more — half a pairing is not a choice to act on.
-/// Where there is only one field, crossing has nowhere to go and settling takes.
+/// ↑/↓ (and `Ctrl-P`/`Ctrl-N`) clamp at both ends rather than wrap and `Tab` crosses boxes. The
+/// cursor is only where the keyboard is looking: it opens on the first hit and returns there on
+/// every edit, while the pick below it does not move.
 #[component]
 pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 	let cols = pool.cols();
-	// one query and one cursor per axis, and which of them has the caret
+	// one query, one cursor and one pick per axis, and which box has the caret
 	let query = [RwSignal::new(String::new()), RwSignal::new(String::new())];
 	let sel = [RwSignal::new(0usize), RwSignal::new(0usize)];
+	let pick: [RwSignal<Option<(usize, String)>>; 2] = [RwSignal::new(None), RwSignal::new(None)];
 	let side = RwSignal::new(0usize);
 	let field = [NodeRef::<leptos::html::Input>::new(), NodeRef::<leptos::html::Input>::new()];
 
@@ -218,26 +218,26 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 			all.into_iter().filter(|(_, s)| subsequence(&q, s)).collect()
 		})
 	});
-	let at = move |col: usize| hits[col].with(|h| h.get(sel[col].get_untracked()).cloned());
-	// a field with no hit has nothing to contribute, and half a pairing opens nothing
+	// a box whose list is empty has no row under the cursor, and picking nothing is not a pick
+	let choose = move |col: usize| {
+		if let Some(hit) = hits[col].with_untracked(|h| h.get(sel[col].get_untracked()).cloned()) {
+			pick[col].set(Some(hit));
+		}
+	};
+	// half a pairing opens nothing — the button says so by being dead until both boxes hold a row
+	let ready = move || (0..cols).all(|col| pick[col].with(Option::is_some));
 	let take = move || match pool {
 		Pool::Study =>
-			if let (Some((i, trade)), Some((_, location))) = (at(0), at(1)) {
+			if let (Some((i, trade)), Some((_, location))) = (pick[0].get_untracked(), pick[1].get_untracked()) {
 				state.picker.set(None);
 				// the row past the served trades is the one the server has no file for
 				crate::map::open(state, (i < state.trades.with_untracked(Vec::len)).then_some(trade), location);
 			},
 		Pool::Open =>
-			if let Some((i, _)) = at(0) {
+			if let Some((i, _)) = pick[0].get_untracked() {
 				state.picker.set(None);
 				crate::map::activate(state, i);
 			},
-	};
-	// what `Enter` and a click both do: the cursor is settled, and the caret goes where there is
-	// still something to narrow
-	let settle = move |col: usize| match cols == 1 {
-		true => take(),
-		false => side.set((col + 1) % cols),
 	};
 
 	// the overlay is modal, so the keys below are only ever the picker's
@@ -260,6 +260,7 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 								node_ref=field[col]
 								placeholder=pool.prompt(col)
 								prop:value=move || query[col].get()
+								on:focus=move |_| side.set(col)
 								on:input=move |ev| {
 									query[col].set(event_target_value(&ev));
 									sel[col].set(0);
@@ -283,7 +284,7 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 										ev.prevent_default();
 										return match ev.ctrl_key() {
 											true => take(),
-											false => settle(col),
+											false => choose(col),
 										};
 									}
 									if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
@@ -301,14 +302,18 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 										.get()
 										.into_iter()
 										.enumerate()
-										.map(|(row, (_, name))| {
+										.map(|(row, (id, name))| {
 											view! {
 												<li
-													class:on=move || sel[col].get() == row
+													class:on=move || {
+														pick[col].with(|p| p.as_ref().is_some_and(|(p, _)| *p == id))
+													}
+													class:cur=move || sel[col].get() == row
 													on:mouseenter=move |_| sel[col].set(row)
 													on:click=move |_| {
+														side.set(col);
 														sel[col].set(row);
-														settle(col);
+														choose(col);
 													}
 												>
 													{name}
@@ -322,7 +327,7 @@ pub fn Picker(state: State, pool: Pool) -> impl IntoView {
 					}
 				})
 				.collect_view()}
-			<button class="go" title="Ctrl+Enter" on:click=move |_| take()>
+			<button class="go" title="Ctrl+Enter" disabled=move || !ready() on:click=move |_| take()>
 				"↵"
 			</button>
 		</div>

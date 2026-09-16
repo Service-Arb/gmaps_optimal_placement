@@ -261,6 +261,8 @@ pub struct Loaded {
 	/// Whether this tab has a trade under it. Everything a slider moves is the trade's, so this is
 	/// what the panel greys out on.
 	pub traded: bool,
+	/// Why a trade that was asked for is not under it — the payload's own words.
+	pub notice: Option<String>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -470,14 +472,16 @@ pub fn MapView() -> impl IntoView {
 			}}
 
 			{move || {
-				(!traded())
-					.then(|| {
-						view! {
-							<p class="note">
-								"No trade — this is the statistical grid alone, and it cost no Places call. Open the same city under a trade for demand, the competitors on it, and the sweeps."
-							</p>
-						}
-					})
+				let l = s.loaded.get()?;
+				let text = match (l.notice, l.traded) {
+					(Some(n), _) => n,
+					(None, false) => {
+						"No trade — this is the statistical grid alone, and it cost no Places call. Open the same city under a trade for demand, the competitors on it, and the sweeps."
+							.to_owned()
+					}
+					(None, true) => return None,
+				};
+				Some(view! { <p class="note">{text}</p> })
 			}}
 
 			<button prop:disabled=move || !traded() on:click=move |_| s.rank()>
@@ -897,7 +901,10 @@ mod imp {
 			imputed: m.payload.imputed.iter().filter(|&&i| i == 1).count(),
 			age_d: m.payload.trade.as_ref().and_then(|t| t.inventory_age_d),
 			traded: m.traded().is_some(),
+			notice: m.payload.notice.clone(),
 		}));
+		// a tab carries its own, so switching away from a refusal does not leave it over the next map
+		s.banner.set(m.payload.notice.clone().map(|n| format!("⚠ {n}")));
 		document().set_title(&m.payload.name);
 		// before the sweep, which is the one slow thing here and which no marker depends on
 		if let Some(el) = host().filter(|_| s.mounted.get_untracked()) {
@@ -971,7 +978,7 @@ mod imp {
 	/// The picker's cursor, kept inside its own scroll box. Rows are one line each — see `#picker li`
 	/// — so the cursor's offset is its index times a row.
 	pub fn scroll_pick(row: usize) {
-		let Some(li) = document().query_selector("#picker .col.on li.on").ok().flatten() else {
+		let Some(li) = document().query_selector("#picker .col.on li.cur").ok().flatten() else {
 			return;
 		};
 		let Some(ul) = li.parent_element() else { return };

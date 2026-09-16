@@ -19,12 +19,13 @@ html,body{margin:0;height:100%;font:13px/1.45 system-ui,sans-serif;background:#1
 #picker input[type=text]{width:100%;box-sizing:border-box;background:#2a2f38;color:#e8e8ea;
       border:1px solid #3a4150;border-radius:5px;padding:6px}
 #picker .col:not(.on) input[type=text]{opacity:.6}
-#picker .col:not(.on) li.on{background:#39404d}
 #picker ul{list-style:none;margin:6px 0 0;padding:0;max-height:50vh;overflow:auto}
 #picker li{padding:4px 6px;border-radius:4px;cursor:pointer;
       white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#picker .col.on li.cur{background:#39404d}
 #picker li.on{background:#2f6df6;color:#fff}
 #picker button.go{flex:none;width:auto;margin:0;padding:6px 10px;align-self:flex-start;font-size:13px}
+#picker button.go:disabled{opacity:.4;cursor:default}
 #settings .row{justify-content:space-between}
 #settings button.sec{width:64px;margin:0;font-variant-numeric:tabular-nums}
 .panel{position:absolute;z-index:5;background:#1b1e23ee;color:#e8e8ea;border-radius:8px;
@@ -32,7 +33,8 @@ html,body{margin:0;height:100%;font:13px/1.45 system-ui,sans-serif;background:#1
 #ctl{top:10px;left:10px;width:266px;max-height:calc(100% - 20px);overflow:auto}
 #report{bottom:10px;left:10px;width:266px;max-height:52%;overflow:auto}
 #banner{position:absolute;z-index:7;top:40px;left:50%;transform:translateX(-50%);
-        background:#4a1d1de6;color:#ffb4b4;border:1px solid #7a2b2b;border-radius:6px;padding:6px 10px}
+        background:#4a1d1de6;color:#ffb4b4;border:1px solid #7a2b2b;border-radius:6px;padding:6px 10px;
+        max-width:min(680px,80vw);max-height:30vh;overflow:auto;white-space:pre-wrap;line-height:1.45}
 h4{margin:0 0 6px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8fa3c8}
 label{display:block;margin:7px 0 2px;color:#b8c0cc;font-size:11.5px}
 select,input[type=range]{width:100%}
