@@ -138,7 +138,12 @@ async fn payload(pool: Pool, build: Build, at: Key) -> Result<([(axum::http::Hea
 				tokio::task::spawn_blocking(move || build(trade.as_deref(), &location).map(axum::body::Bytes::from))
 					.await
 					.map_err(|e| format!("building {shown}: {e}"))?
-					.map_err(|e| format!("{e:?}"))
+					// the chain and not `{e:?}`: the backtrace belongs in this terminal, and a page that hands
+					// one to whoever opened a city has stopped being a map
+					.map_err(|e| {
+						eprintln!("building {shown}: {e:?}");
+						format!("{e:#}")
+					})
 			}
 		})
 		.await

@@ -64,6 +64,35 @@ const YEAR: Duration = Duration::from_secs(365 * 86_400);
 /// The one quota a sweep runs out of.
 const QUOTA: &str = "SearchTextRequestPerDayPerProject";
 
+/// The day's searches, spent. The one refusal this tool expects to meet, and the only place the
+/// real number is ever visible: an API key cannot read the counter — `serviceusage` answers
+/// `API_KEY_SERVICE_BLOCKED` and `monitoring` refuses keys outright.
+///
+/// Its own type because a caller painting a map has somewhere to go from here and a caller buying an
+/// inventory does not, and the two cannot tell a spent day from a malformed query through a string.
+#[derive(Debug)]
+pub struct Exhausted {
+	/// Searches a day the project is allowed, as the refusal spelled it.
+	pub limit: String,
+	/// Unix seconds the window rolls over at.
+	pub reset: Option<u64>,
+}
+impl std::fmt::Display for Exhausted {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "the day's Google Places search quota is spent — this project is allowed {} searches a day", self.limit)?;
+		if let Some(r) = self.reset {
+			write!(
+				f,
+				". The window resets at {:02}:{:02} UTC, and nothing already answered is re-asked, so a rerun pays only for the rest",
+				r % 86_400 / 3600,
+				r % 3600 / 60
+			)?;
+		}
+		Ok(())
+	}
+}
+impl std::error::Error for Exhausted {}
+
 /// Oldest and median age of the answers one run served for a kind.
 pub struct Aged {
 	pub oldest: Duration,
@@ -272,8 +301,10 @@ impl Work {
 		// the body of a refusal says which quota or which field, and it is never written to the cache:
 		// one cached 429 would answer for that request forever
 		if !status.is_success() {
-			if url == crate::poi::SEARCH_TEXT {
-				self.exhausted(&text);
+			if url == crate::poi::SEARCH_TEXT
+				&& let Some(spent) = Self::exhausted(&text)
+			{
+				return Err(spent.into());
 			}
 			bail!("POST {url} -> {status}\n{}", text.trim());
 		}
@@ -311,30 +342,20 @@ impl Work {
 		Ok((json, SystemTime::now()))
 	}
 
-	/// A 429 naming the daily search quota is the only place the real number is ever visible: an API
-	/// key cannot read it — `serviceusage` answers `API_KEY_SERVICE_BLOCKED` and `monitoring` refuses
-	/// keys outright. Report what it says and let the error carry the rest.
-	fn exhausted(&self, body: &str) {
-		let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else { return };
-		let Some(m) = v["error"]["details"]
+	/// What a refusal says about the day, if it is about the day at all. Anything else — a malformed
+	/// query, a key with the wrong referrer — is `None` and travels as the body it arrived as.
+	fn exhausted(body: &str) -> Option<Exhausted> {
+		let v = serde_json::from_str::<serde_json::Value>(body).ok()?;
+		let m = v["error"]["details"]
 			.as_array()
 			.into_iter()
 			.flatten()
 			.map(|d| &d["metadata"])
-			.find(|m| m["quota_limit"].as_str() == Some(QUOTA))
-		else {
-			return;
-		};
-		let limit = m["quota_limit_value"].as_str().unwrap_or("?");
-		let reset = m["window_start_time"].as_str().and_then(|s| s.parse::<u64>().ok()).map(|start| start + 86_400);
-		eprintln!("{QUOTA} is spent — the project's limit is {limit} a day.");
-		if let Some(r) = reset {
-			eprintln!(
-				"  the window resets at {:02}:{:02} UTC; nothing already answered is re-asked, so a rerun pays only for the rest",
-				r % 86_400 / 3600,
-				r % 3600 / 60
-			);
-		}
+			.find(|m| m["quota_limit"].as_str() == Some(QUOTA))?;
+		Some(Exhausted {
+			limit: m["quota_limit_value"].as_str().unwrap_or("?").to_owned(),
+			reset: m["window_start_time"].as_str().and_then(|s| s.parse::<u64>().ok()).map(|start| start + 86_400),
+		})
 	}
 }
 
@@ -363,16 +384,24 @@ mod tests {
 
 	/// A malformed refusal must not take the process down on the way to reporting the real error.
 	#[test]
-	fn a_refusal_is_read_for_what_it_says_and_nothing_is_written() {
-		let tmp = std::env::temp_dir().join("gop_work_refusal");
-		let _ = fs::remove_dir_all(&tmp);
-		let work = Work::at(&tmp);
+	fn a_refusal_is_read_for_what_it_says() {
+		let spent = Work::exhausted(REFUSAL).expect("the refusal names the daily search quota");
+		assert_eq!(spent.limit, "100");
+		assert_eq!(spent.reset, Some(1789369200 + 86_400));
+		assert!(Work::exhausted("not json at all").is_none());
+		assert!(Work::exhausted(r#"{"error":{}}"#).is_none());
+		assert!(Work::exhausted(r#"{"error":{"details":[{"metadata":{"quota_limit":"PlacesPerMinute"}}]}}"#).is_none());
+	}
 
-		work.exhausted(REFUSAL);
-		work.exhausted("not json at all");
-		work.exhausted(r#"{"error":{}}"#);
-		assert!(!tmp.join("places_budget.json").exists(), "nothing about the quota is kept on disk");
-
-		let _ = fs::remove_dir_all(&tmp);
+	/// A sweep wraps the refusal in a query and a tile on the way up, and a map falls back to the
+	/// grid on exactly this downcast: lose it and the page errors out instead.
+	#[test]
+	fn a_spent_day_is_still_itself_under_the_context_a_sweep_adds() {
+		let e = Err::<(), _>(eyre::Report::from(Work::exhausted(REFUSAL).unwrap()))
+			.wrap_err("sweeping \"plombier\"")
+			.wrap_err("plumbing in Lyon")
+			.unwrap_err();
+		assert!(e.downcast_ref::<Exhausted>().is_some());
+		assert!(format!("{e:#}").contains("spent"), "the chain carries what the day was refused for: {e:#}");
 	}
 }

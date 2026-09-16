@@ -19,6 +19,11 @@ pub struct Payload {
 	/// Absent when a location was opened without one. Everything above is the location's, comes out
 	/// of the statistical archive, and costs nothing to ask for.
 	pub trade: Option<Trade>,
+	/// Why the map is less than what was asked for — a spent day of Places quota above all. Set, the
+	/// trade half is missing for a reason the page can state, rather than for the reason `trade: None`
+	/// usually means.
+	#[serde(default)]
+	pub notice: Option<String>,
 }
 
 /// The half of a payload a trade decides, and the whole of the half that is billed. One `Option`

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use eyre::{Result, WrapErr, bail, ensure};
 pub use gmaps_optimal_placement_core as core;
 use gmaps_optimal_placement_core::{
-	Expr, LayerOut, PoiOut, TierOut,
+	Expr, LayerOut, PoiOut, Scale, TierOut,
 	rank::{self, Biz, Feats, Rank},
 };
 pub use gmaps_optimal_placement_core::{Payload, payload};
@@ -195,11 +195,35 @@ impl Study {
 				ring.push(round1(p[1], 5));
 			}
 		}
-		let trade = match (&self.poi, &self.model, &self.rank) {
-			(None, None, None) => None,
+		let (trade, notice) = match (&self.poi, &self.model, &self.rank) {
+			(None, None, None) => (None, None),
 			// a half-written trade is not a location, and `trade()` says which block is missing
-			_ => Some(self.billed(&cells, &place, work)?),
+			_ => match self.billed(&cells, &place, work) {
+				Ok(t) => (Some(t), None),
+				// the quota is the one refusal that is neither this tool's fault nor a study that will not
+				// build: what the archive paid for is already here, so the map opens on it and says why the
+				// ground is empty. A partial sweep is not served — half an inventory reads as a whole one
+				Err(e) => match e.downcast_ref::<sources::work::Exhausted>() {
+					Some(spent) => (None, Some(format!("{spent}. No competitor is on this map, and nothing that reads one is offered."))),
+					None => return Err(e),
+				},
+			},
 		};
+		let mut layers = Vec::new();
+		if let Some(n) = &notice {
+			eprintln!("{}: {n}", self.name);
+			// the demand surface is the trade's expression over the archive and was evaluated before the
+			// first call, so it is the one thing a spent day does not take away. First, so the map opens
+			// on it rather than on whatever the location happened to list
+			let model = self.model.as_ref().expect("a study that reached the sweep declares a model");
+			layers.push(LayerOut {
+				name: "Demand".to_owned(),
+				note: model.demand.clone(),
+				scale: Scale::Percentile,
+				values: round(self.demand(&cells)?.to_vec(), 3),
+			});
+		}
+		layers.extend(cells.layers);
 		Ok(Payload {
 			name: self.name.clone(),
 			center: self.area.center,
@@ -207,9 +231,10 @@ impl Study {
 			ring,
 			imputed: cells.grid.cells.iter().map(|c| u8::from(c.imputed)).collect(),
 			place,
-			layers: cells.layers,
+			layers,
 			candidates: self.candidates.clone(),
 			trade,
+			notice,
 		})
 	}
 
