@@ -1,1 +1,0 @@
-- if they get anyhow suspicious/uncertain when we're pitching them, - call them instantly
